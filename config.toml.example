@@ -1,0 +1,101 @@
+# MeshCore IRC Gateway — example configuration
+# Copy this file to config.toml and edit the values marked REQUIRED.
+
+# ── MeshCore serial connection ────────────────────────────────────────────────
+[meshcore]
+tty      = "/dev/ttyUSB0"   # REQUIRED — serial port of the MeshCore device
+baudrate = 115200            # optional — serial baud rate (default: 115200)
+
+# ── IRC server ────────────────────────────────────────────────────────────────
+[irc]
+host     = "0.0.0.0"        # REQUIRED — IP address the IRC server binds to
+                             #   use 0.0.0.0 to listen on all interfaces, or a
+                             #   specific IP to restrict access
+port     = 6667              # REQUIRED — TCP port for IRC clients to connect to
+password = "changeme"        # REQUIRED — IRC connection password (all clients)
+
+member_timeout = 3600        # optional — seconds of silence before a channel
+                             #   member is removed from the user list (default: 3600)
+voice_timeout  = 600         # optional — seconds after last message before a
+                             #   channel member loses voice (+v) status (default: 600)
+away_timeout   = 900         # optional — seconds of silence before a channel member
+                             #   is marked as away (+a) in the user list (default: 900)
+
+# TLS (SSL) listener — runs alongside the plain port when configured.
+# A self-signed certificate is generated automatically if the files do not exist.
+# ssl_port = 6697            # optional — TLS port (conventional IRC-over-TLS port)
+# ssl_cert = "irc_cert.pem"  # optional — path to PEM certificate (default: irc_cert.pem)
+# ssl_key  = "irc_key.pem"   # optional — path to PEM private key  (default: irc_key.pem)
+
+# Characters accepted as separators after a nick in a channel mention.
+# E.g. with ":,;" the bot translates "@Nick:" "@Nick," and "@Nick;" to @[OriginalName].
+# Default: ":" (colon only)
+# mention_separators = ":,;"
+
+# Path to the persistent block list file (default: "blocklist.json")
+# blocklist_file = "blocklist.json"
+
+# Path to the persistent repeater password store (default: "repeater_passwords.json")
+# passwords_file = "repeater_passwords.json"
+
+# ── Built-in web / map server ─────────────────────────────────────────────────
+[webserver]
+port = 8080                  # optional — HTTP port (default: 8080)
+bind = "0.0.0.0"             # optional — bind address (default: 0.0.0.0)
+
+# Public base URL used in /whois Map links and the node-path index.
+# Set this if the server is behind a reverse proxy or has a public hostname.
+# Defaults to  http://<irc.host>:<webserver.port>
+# url = "https://meshcore.example.com"
+
+# Appearance of SNR labels on neighbour maps
+snr_font_size = 13           # optional — font size in px (default: 13)
+snr_padding   = "2px 6px"   # optional — CSS padding for SNR labels (default: "2px 6px")
+
+# Path line weights on /map/nodes/<name> visualisation
+path_advert_line_weight  = 2.5   # optional — advert path line width (default: 2.5)
+path_msg_line_weight     = 2.0   # optional — message path line width (default: 2.0)
+path_direct_line_weight  = 1.5   # optional — direct distance line width (default: 1.5)
+
+# Node marker and path colors on /map/nodes/<name>
+# Values are CSS color strings (hex, rgb, rgba, named)
+path_color_self        = "#3388ff"                # gateway (our own node)
+path_color_hop         = "#f39c12"                # intermediate hop node
+path_color_target      = "#e74c3c"                # target node
+path_color_remote      = "#888888"                # node with meshcore.io-sourced location
+path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-position label
+
+# Line weight for edges on neighbour maps
+# neighbours_line_weight = 2.0        # optional (default: 2.0)
+
+# Line thickness range on /map/heath/Xb — thinnest line (1 packet) to thickest (most packets)
+# heath_line_weight_min = 3.0         # optional (default: 3.0)
+# heath_line_weight_max = 10.0        # optional (default: 10.0)
+
+# Auto-refresh intervals offered in the /map/nodes Refresh drop-down (seconds).
+# Displayed in the best matching unit: s / m / h.
+# nodes_refresh_intervals = [120, 300, 600]   # optional (default: [120, 300, 600])
+
+# meshcore.io location lookup (used to resolve unknown ?hash nodes on path maps)
+# Please keep the refresh interval at 48 h or longer to avoid overloading meshcore.io.
+# meshcore_map_url            = "https://meshcore.io/nodes.json"
+# meshcore_map_cache          = "meshcore_map.json"  # local cache file
+# meshcore_map_refresh_hours  = 48    # re-fetch interval in hours — keep ≥ 48 to be a good citizen (default: 48)
+# meshcore_map_max_hop_km     = 100.0 # discard resolved positions farther than this from their
+                                      #   neighbour (prevents wildly wrong matches)
+
+# ── Persistent caches ─────────────────────────────────────────────────────────
+[cache]
+file          = "nodes.json"      # optional — unified node cache (default: nodes.json)
+max_age_hours = 336               # optional — discard cache entries older than this
+                                  #   (default: 336 = 14 days)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+[log]
+file  = "meshcoreirc.log"    # optional — log file path; omit to log to stdout only
+debug = false                # optional — enable verbose DEBUG logging (default: false)
+
+# filter controls which subsystem is logged; omit to log everything
+#   "irc"      — IRC traffic only  (suppresses meshcore library logs)
+#   "meshcore" — MeshCore events only (suppresses IRC traffic logs)
+# filter = "meshcore"

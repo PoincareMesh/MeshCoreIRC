@@ -1,0 +1,10 @@
+.venv
+.claude
+__pycache__/
+neighbours/
+config.toml
+*.json
+*.log
+improvements.txt
+helper.txt
+*.pem
