@@ -249,6 +249,9 @@ Opening a DM with a repeater contact gives access to repeater commands. Type the
 | `login [password]` | Authenticate with the repeater (uses saved password if omitted) |
 | `logout` | End the session |
 | `synctime` | Sync the repeater's clock to the gateway's current time |
+| `telemetry` | Request telemetry from the repeater (battery, GPS, sensors) |
+| `advert` | Send a flood advertisement from the repeater |
+| `zeroadvert` | Send a zero-hop advertisement from the repeater |
 | `status` | Request repeater status |
 | `neighbours` | List the repeater's neighbours |
 | `expand` | Fetch the next batch of neighbours |

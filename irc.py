@@ -487,15 +487,25 @@ class IRCClient:
             logger.error("send_chan_msg failed: %s", e)
             self._bot_notice(f"Channel send failed: {e}")
 
+    def _contact_notice(self, contact: dict, text: str):
+        """Broadcast a message that appears in the contact's DM tab on all clients."""
+        nick = sanitize_nick(contact['adv_name'])
+        pubkey = contact.get('public_key', '')
+        self.bridge.broadcast(f":{nick}!{pubkey[:12] or 'mesh'}@meshcore PRIVMSG {self.nick} :{text}")
+
     async def _send_dm(self, contact: dict, text: str):
         try:
             ev = await self.bridge.mc.commands.send_msg_with_retry(contact, text)
-            if ev and ev.is_error():
+            if ev is None:
+                name = contact.get('adv_name', '?')
+                logger.warning("send_dm: no ACK from %s", name)
+                self._contact_notice(contact, f"Delivery failed: no ACK from {name}")
+            elif ev.is_error():
                 logger.error("send_dm failed: %s", ev.payload)
-                self._bot_notice(f"Send failed: {ev.payload}")
+                self._contact_notice(contact, f"Send failed: {ev.payload}")
         except Exception as e:
             logger.error("send_dm exception: %s", e)
-            self._bot_notice(f"Send failed: {e}")
+            self._contact_notice(contact, f"Send failed: {e}")
 
     def _bot_contact_line(self, c: dict, pubkey: str):
         nick = self.bridge.contact_nick(c)
@@ -1163,7 +1173,7 @@ class IRCClient:
                 nick = sanitize_nick(contact['adv_name'])
                 self.bridge.repeater_sessions[nick.lower()] = contact
                 reply_fn(f"Logged in to {contact['adv_name']} ({role})")
-                self._repeater_msg(contact, f"Session open ({role}) — commands: status  neighbours  expand  synctime  cli <cmd>  logout")
+                self._repeater_msg(contact, f"Session open ({role}) — commands: status  neighbours  expand  synctime  telemetry  advert  zeroadvert  cli <cmd>  logout")
             else:
                 reply_fn(f"Login to {contact['adv_name']} failed or timed out")
         except Exception as e:
@@ -1211,6 +1221,24 @@ class IRCClient:
         except Exception as e:
             reply_fn(f"Time sync error: {e}")
 
+    async def _bot_repeater_advert(self, contact: dict, flood: bool, reply_fn=None):
+        if reply_fn is None:
+            reply_fn = lambda m: self._repeater_msg(contact, m)
+        mc = self.bridge.mc
+        if not mc:
+            reply_fn("MeshCore not connected")
+            return
+        cmd_str = "advert" if flood else "advert.zerohop"
+        try:
+            ev = await mc.commands.send_cmd(contact, cmd_str)
+            if ev and ev.is_error():
+                reply_fn(f"Advert failed: {ev.payload.get('reason', '?')}")
+            else:
+                kind = "flood" if flood else "zero-hop"
+                reply_fn(f"Advert sent ({kind})")
+        except Exception as e:
+            reply_fn(f"Advert error: {e}")
+
     def _bot_savepassword(self, nick: str, pwd: str, reply_fn=None):
         if reply_fn is None:
             reply_fn = self._bot_msg
@@ -1247,6 +1275,12 @@ class IRCClient:
             await self._bot_cli(contact, arg, reply_fn=reply)
         elif cmd == 'synctime':
             await self._bot_synctime(contact, reply_fn=reply)
+        elif cmd == 'telemetry':
+            await self._bot_telemetry(contact, reply_fn=reply)
+        elif cmd == 'zeroadvert':
+            await self._bot_repeater_advert(contact, flood=False, reply_fn=reply)
+        elif cmd in ('advert', 'floodadvert'):
+            await self._bot_repeater_advert(contact, flood=True, reply_fn=reply)
         elif cmd == 'savepassword':
             if not arg:
                 self._repeater_msg(contact, "Usage: savepassword <password>")
@@ -1257,7 +1291,7 @@ class IRCClient:
             nick = sanitize_nick(contact['adv_name'])
             self._bot_deletepassword(nick, reply_fn=reply)
         else:
-            self._repeater_msg(contact, "Commands: login [pwd]  synctime  savepassword <pwd>  deletepassword  status  neighbours  logout  cli <cmd>")
+            self._repeater_msg(contact, "Commands: login [pwd]  logout  synctime  telemetry  advert  zeroadvert  status  neighbours  expand  savepassword <pwd>  deletepassword  cli <cmd>")
 
     async def _bot_status(self, contact: dict, reply_fn=None):
         if reply_fn is None:
