@@ -340,5 +340,5 @@ class MeshCoreHandler:
                 # Merge into stored contact so fields like out_path_len are preserved
                 merged = {**self.bridge.contacts.get(pubkey, {}), **contact}
                 self.bridge.contacts[pubkey] = merged
-                logger.info("New contact: %s [%s]", merged.get('adv_name'), pubkey[:12])
+                logger.info("New advert: %s [%s]", merged.get('adv_name'), pubkey[:12])
                 asyncio.create_task(self._fetch_path_and_announce(pubkey, merged))

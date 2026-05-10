@@ -225,6 +225,32 @@ class Bridge:
         """Return the original MeshCore name for an IRC nick, or None if unknown."""
         return self._nick_to_name.get(nick.lower())
 
+    def rename_contact_nick(self, old_name: str, new_name: str, host: str = 'mesh') -> tuple[str, str] | None:
+        """Rename a contact's IRC nick and broadcast NICK messages to all clients.
+
+        Returns (old_nick, new_nick) on success, or None if old_name had no assigned nick.
+        """
+        old_nick = self._name_to_nick.get(old_name)
+        if not old_nick:
+            return None
+
+        del self._name_to_nick[old_name]
+        del self._nick_to_name[old_nick.lower()]
+
+        new_nick = self.assign_contact_nick(new_name)
+
+        # Rename in channel_members
+        for ch_members in self.channel_members.values():
+            if old_nick in ch_members:
+                ch_members[new_nick] = ch_members.pop(old_nick)
+
+        # Rename in channel_msg_path_nodes
+        if old_nick in self.channel_msg_path_nodes:
+            self.channel_msg_path_nodes[new_nick] = self.channel_msg_path_nodes.pop(old_nick)
+
+        self.broadcast(f":{old_nick}!{host}@meshcore NICK :{new_nick}")
+        return old_nick, new_nick
+
     def contact_nick(self, contact: dict) -> str:
         return self.assign_contact_nick(contact.get('adv_name', 'unknown'))
 

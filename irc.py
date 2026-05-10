@@ -499,7 +499,7 @@ class IRCClient:
             if ev is None:
                 name = contact.get('adv_name', '?')
                 logger.warning("send_dm: no ACK from %s", name)
-                self._contact_notice(contact, f"Delivery failed: no ACK from {name}")
+                self._contact_notice(contact, f"Delivery failed: no ACK from {name}: {text}")
             elif ev.is_error():
                 logger.error("send_dm failed: %s", ev.payload)
                 self._contact_notice(contact, f"Send failed: {ev.payload}")
@@ -1660,7 +1660,13 @@ class IRCClient:
                 if self.bridge.node_cache:
                     self.bridge.node_cache.update(contact)
                     self.bridge.node_cache.flush()
-                self._bot_msg(f"Renamed: {old_name} → {new_name} [{pubkey[:12]}]")
+                host = pubkey[:12] or 'mesh'
+                result = self.bridge.rename_contact_nick(old_name, new_name, host=host)
+                if result:
+                    old_nick, new_nick = result
+                    self._bot_msg(f"Renamed: {old_nick} → {new_nick} [{pubkey[:12]}]")
+                else:
+                    self._bot_msg(f"Renamed: {old_name} → {new_name} [{pubkey[:12]}]")
             else:
                 self._bot_msg(f"Failed to rename contact: {old_name}")
         except Exception as e:
