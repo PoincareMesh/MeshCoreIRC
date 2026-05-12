@@ -208,14 +208,12 @@ class MeshCoreHandler:
             if not mc:
                 return
 
-            # Resolve contact (fetch from device if not yet cached locally)
-            contact = self.bridge.contacts.get(pubkey)
-            if not contact or not contact.get('adv_name'):
-                ev = await mc.commands.get_contact_by_key(bytes.fromhex(pubkey))
-                if ev and not ev.is_error():
-                    contact = ev.payload
-                if contact and contact.get('adv_name'):
-                    self.bridge.contacts[pubkey] = contact
+            # Always re-fetch from device so updated location data is captured
+            fallback = self.bridge.contacts.get(pubkey)
+            ev = await mc.commands.get_contact_by_key(bytes.fromhex(pubkey))
+            contact = ev.payload if (ev and not ev.is_error()) else fallback
+            if contact and contact.get('adv_name'):
+                self.bridge.contacts[pubkey] = contact
 
             if not contact or not contact.get('adv_name'):
                 return

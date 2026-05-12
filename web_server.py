@@ -82,25 +82,40 @@ function makeIcon(color, size) {{
   }});
 }}
 
-// Draw polylines and SNR labels before markers so markers render on top
+function distKm(lat1, lon1, lat2, lon2) {{
+  var R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180;
+  var a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}}
+
+// Labels behind lines, lines behind node markers
+map.createPane('labelPane');
+map.getPane('labelPane').style.zIndex = 350;
+map.getPane('labelPane').style.pointerEvents = 'none';
+
 if (REP_LAT || REP_LON) {{
   NODES.forEach(function(n) {{
     if (!n.lat && !n.lon) return;
-    L.polyline([[REP_LAT, REP_LON], [n.lat, n.lon]], {{
-      color: '#888', weight: 1.5, dashArray: '5,5', opacity: 0.7
-    }}).addTo(map);
     if (n.snr != null) {{
       const mid = [(REP_LAT + n.lat) / 2, (REP_LON + n.lon) / 2];
+      const d = distKm(REP_LAT, REP_LON, n.lat, n.lon);
       L.marker(mid, {{
+        pane: 'labelPane',
         icon: L.divIcon({{
           html: '<div style="display:inline-block;transform:translate(-50%,-50%);background:rgba(255,255,255,0.88);' +
                 'padding:{snr_padding};border-radius:3px;font-size:{snr_font_size}px;border:1px solid #bbb;' +
-                'white-space:nowrap">' + n.snr.toFixed(1) + ' dB</div>',
+                'white-space:nowrap">' + d.toFixed(1) + ' km  ' + n.snr.toFixed(1) + ' dB</div>',
           className: '', iconSize: [0, 0]
         }}),
         interactive: false
       }}).addTo(map);
     }}
+  }});
+  NODES.forEach(function(n) {{
+    if (!n.lat && !n.lon) return;
+    L.polyline([[REP_LAT, REP_LON], [n.lat, n.lon]], {{
+      color: '#888', weight: 1.5, dashArray: '5,5', opacity: 0.7
+    }}).addTo(map);
   }});
 }}
 

@@ -358,6 +358,8 @@ class IRCClient:
         self.numeric('372', ':-   addcontact <nick|pubkey>                save discovered contact to companion')
         self.numeric('372', ':-   removecontact <nick|pubkey>             remove contact from companion')
         self.numeric('372', ':-   renamecontact <nick|pubkey> <new name>  rename a saved contact')
+        self.numeric('372', ':-   resetpath <nick|pubkey>                 reset path to flood (auto-learn)')
+        self.numeric('372', ':-   setpath <nick|pubkey> <hex>[:<mode>]   set fixed path')
         self.numeric('372', ':-')
         self.numeric('372', ':-   block / unblock / blocklist   ignore channel messages from a user')
         self.numeric('372', ':- /whois <nick>  shows full contact details (pubkey, position, ...)')
@@ -563,6 +565,8 @@ class IRCClient:
                 "  addcontact <nick|pubkey>     save a discovered contact",
                 "  removecontact <nick|pubkey>  remove a saved contact from companion",
                 "  renamecontact <nick|pubkey> <new name>  rename a saved contact",
+                "  resetpath <nick|pubkey>      reset path to flood (auto-learn)",
+                "  setpath <nick|pubkey> <hex>[:<mode>]  set fixed path (mode 0-3)",
                 "  block <nick|pubkey>          ignore channel messages from a user",
                 "  unblock <nick>               remove from block list",
                 "  blocklist                    show block list",
@@ -807,6 +811,19 @@ class IRCClient:
             target = parts[1]
             new_name = ' '.join(parts[2:]).strip()
             asyncio.create_task(self._bot_renamecontact(target, new_name))
+
+        elif cmd == 'resetpath':
+            arg = ' '.join(parts[1:]).strip()
+            if not arg:
+                self._bot_msg("Usage: resetpath <nick|pubkey>")
+                return
+            asyncio.create_task(self._bot_resetpath(arg))
+
+        elif cmd == 'setpath':
+            if len(parts) < 3:
+                self._bot_msg("Usage: setpath <nick|pubkey> <path_hex>[:<mode>]")
+                return
+            asyncio.create_task(self._bot_setpath(parts[1], parts[2]))
 
         elif cmd == 'telemetry':
             arg = ' '.join(parts[1:]).strip()
@@ -1671,6 +1688,83 @@ class IRCClient:
                 self._bot_msg(f"Failed to rename contact: {old_name}")
         except Exception as e:
             self._bot_msg(f"renamecontact error: {e}")
+
+    def _resolve_contact_for_path_cmd(self, arg: str):
+        contact = self.bridge.contact_for_nick(arg)
+        if not contact:
+            arg_lower = arg.lower()
+            for pubkey, c in self.bridge.contacts.items():
+                if pubkey.lower().startswith(arg_lower):
+                    contact = c
+                    break
+        return contact
+
+    async def _bot_resetpath(self, arg: str):
+        contact = self._resolve_contact_for_path_cmd(arg)
+        if not contact:
+            self._bot_msg(f"Contact not found: {arg}  (try: contacts)")
+            return
+        if not self.bridge.mc:
+            self._bot_msg("MeshCore not connected")
+            return
+        pubkey = contact.get('public_key', '')
+        name = contact.get('adv_name', arg)
+        if pubkey not in self.bridge.mc.contacts:
+            self._bot_msg(f"{name} [{pubkey[:12]}] is not a saved contact on the companion")
+            return
+        try:
+            ev = await self.bridge.mc.commands.reset_path(bytes.fromhex(pubkey))
+            if ev and not ev.is_error():
+                contact = dict(contact)
+                contact['out_path_len'] = -1
+                contact['out_path'] = '0' * 128
+                self.bridge.mc.contacts[pubkey] = contact
+                self.bridge.contacts[pubkey] = contact
+                if self.bridge.node_cache:
+                    self.bridge.node_cache.update(contact)
+                    self.bridge.node_cache.flush()
+                self._bot_msg(f"Path reset (flood) for {name} [{pubkey[:12]}]")
+            else:
+                reason = ev.payload.get('reason', '?') if ev else 'no response'
+                self._bot_msg(f"resetpath failed for {name}: {reason}")
+        except Exception as e:
+            self._bot_msg(f"resetpath error: {e}")
+
+    async def _bot_setpath(self, arg: str, path_arg: str):
+        contact = self._resolve_contact_for_path_cmd(arg)
+        if not contact:
+            self._bot_msg(f"Contact not found: {arg}  (try: contacts)")
+            return
+        if not self.bridge.mc:
+            self._bot_msg("MeshCore not connected")
+            return
+        pubkey = contact.get('public_key', '')
+        name = contact.get('adv_name', arg)
+        if pubkey not in self.bridge.mc.contacts:
+            self._bot_msg(f"{name} [{pubkey[:12]}] is not a saved contact on the companion")
+            return
+        # Validate hex (strip optional :mode suffix for the check)
+        hex_part = path_arg.split(':')[0]
+        if not hex_part or not all(c in '0123456789abcdefABCDEF' for c in hex_part):
+            self._bot_msg("Path must be a hex string, e.g. d3810a51 or d3810a51:1")
+            return
+        try:
+            contact = dict(contact)
+            ev = await self.bridge.mc.commands.change_contact_path(contact, path_arg)
+            if ev and not ev.is_error():
+                self.bridge.mc.contacts[pubkey] = contact
+                self.bridge.contacts[pubkey] = contact
+                if self.bridge.node_cache:
+                    self.bridge.node_cache.update(contact)
+                    self.bridge.node_cache.flush()
+                hops = contact.get('out_path_len', '?')
+                mode = contact.get('out_path_hash_mode', '?')
+                self._bot_msg(f"Path set for {name} [{pubkey[:12]}]: {hops} hop(s) mode={mode}")
+            else:
+                reason = ev.payload.get('reason', '?') if ev else 'no response'
+                self._bot_msg(f"setpath failed for {name}: {reason}")
+        except Exception as e:
+            self._bot_msg(f"setpath error: {e}")
 
     async def _bot_telemetry(self, contact: dict, reply_fn=None):
         if reply_fn is None:

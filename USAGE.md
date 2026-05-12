@@ -181,6 +181,8 @@ Send commands via private message to the `_MeshCore` bot:
 | `addcontact <nick\|pubkey>`               | Save a discovered contact to the companion (survives restart) |
 | `removecontact <nick\|pubkey>`            | Remove a contact from the companion  |
 | `renamecontact <nick\|pubkey> <new name>` | Rename a saved contact on the companion |
+| `resetpath <nick\|pubkey>`               | Reset path to flood so the companion auto-learns the best route |
+| `setpath <nick\|pubkey> <hex>[:<mode>]`  | Set a fixed path; hex is concatenated repeater hash bytes, optional `:<mode>` suffix selects hash size (0=1B 1=2B 2=3B 3=4B); mode defaults to the device setting if omitted |
 | `telemetry <nick>`                        | Request telemetry from a contact (battery, GPS, sensors) |
 | `telemetryallow <nick> <data\|sensors\|location\|all>` | Grant a contact permission to retrieve our telemetry |
 | `telemetrydeny <nick> <data\|sensors\|location\|all>`  | Revoke a contact's telemetry permission |
@@ -194,6 +196,67 @@ Send commands via private message to the `_MeshCore` bot:
 `addcontact` and `renamecontact` accept a nick name, a full 64-character hex public key, or a unique prefix of a public key.
 
 Block list entries are stored in `blocklist.json` (configurable via `[irc] blocklist_file`) and survive restarts. Only channel messages are affected — direct messages still arrive.
+
+## Setting a fixed path
+
+By default MeshCore uses flood routing and learns the best path automatically after receiving adverts. `setpath` lets you pin a contact to a specific route through one or more repeaters, the same way the default MeshCore app's *Set Path* feature works.
+
+### Path hash mode
+
+Each hop in the path is represented by a truncated hash of the repeater's public key. The number of bytes used per hop is the **mode**:
+
+| Mode | Bytes per hop | Hex chars per hop |
+|------|--------------|-------------------|
+| 0    | 1            | 2                 |
+| 1    | 2            | 4                 |
+| 2    | 3            | 6                 |
+| 3    | 4            | 8                 |
+
+This corresponds directly to the `pathmode` device setting (mode 0 = pathmode 1, mode 3 = pathmode 4). If you omit `:<mode>`, the device's current `pathmode` setting is used.
+
+Higher mode values reduce hash collisions at the cost of slightly more overhead. Most networks use mode 1 (2-byte hashes).
+
+### Finding the hash values
+
+The gateway logs every received advert path:
+
+```
+Advert path for 69ced325f5c5: path_len=2 via ['?d381', 'BE-DUF-SiSCD-01']
+```
+
+The `?d381` entries are unknown repeaters shown by their hash. Named repeaters are resolved from your contact list. The hash bytes for each hop are the characters after `?`.
+
+You can also read the path from the advert notice that appears in your IRC status window, or from `/whois <nick>` which shows the full advert path.
+
+### Building the path string
+
+Concatenate the hash bytes of each repeater **in path order** (the order they appear in the advert, from the contact's side toward the gateway). Do not include the gateway itself.
+
+**Single hop** through repeater `d381` with 2-byte hashes (mode 1):
+
+```
+/msg _MeshCore setpath BE-3010 d381:1
+```
+
+**Two hops** through `d381` then `0a51`:
+
+```
+/msg _MeshCore setpath BE-3010 d3810a51:1
+```
+
+**Three hops** through `d381`, `0a51`, `5608`:
+
+```
+/msg _MeshCore setpath BE-3010 d3810a515608:1
+```
+
+If the advert shows full contact names instead of `?hash`, look up their pubkey with `contacts all <name>` and use the first 2×mode bytes of the pubkey as the hash.
+
+To go back to automatic flood routing:
+
+```
+/msg _MeshCore resetpath BE-3010
+```
 
 ## Telemetry
 
