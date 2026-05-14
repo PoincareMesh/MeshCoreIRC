@@ -114,7 +114,7 @@ if (REP_LAT || REP_LON) {{
   NODES.forEach(function(n) {{
     if (!n.lat && !n.lon) return;
     L.polyline([[REP_LAT, REP_LON], [n.lat, n.lon]], {{
-      color: '#888', weight: 1.5, dashArray: '5,5', opacity: 0.7
+      color: '#888', weight: {line_weight}, dashArray: '5,5', opacity: 0.7
     }}).addTo(map);
   }});
 }}
@@ -818,7 +818,8 @@ def _fmt_age(secs: int) -> str:
 
 def _render(title: str, nodes: list,
             rep_lat: float = 0.0, rep_lon: float = 0.0, rep_name: str = '',
-            snr_font_size: int = 13, snr_padding: str = '2px 6px') -> bytes:
+            snr_font_size: int = 13, snr_padding: str = '2px 6px',
+            line_weight: float = 1.5) -> bytes:
     html = _HTML_TEMPLATE.format(
         title=_html.escape(title),
         nodes_json=json.dumps(nodes, ensure_ascii=False),
@@ -827,6 +828,7 @@ def _render(title: str, nodes: list,
         rep_name_json=json.dumps(rep_name),
         snr_font_size=snr_font_size,
         snr_padding=snr_padding,
+        line_weight=line_weight,
     )
     return html.encode('utf-8')
 
@@ -1678,6 +1680,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, br
                             title, nodes, rep_lat, rep_lon, rep_name,
                             snr_font_size=int(web_cfg.get('snr_font_size', 13)),
                             snr_padding=str(web_cfg.get('snr_padding', '2px 6px')),
+                            line_weight=float(web_cfg.get('neighbours_line_weight', 1.5)),
                         )
                 else:
                     body = _render_index(neighbours_store.list_all())

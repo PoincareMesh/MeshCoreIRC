@@ -436,7 +436,7 @@ class IRCClient:
                 self.numeric('403', target, ':No such channel')
                 return
             mc_text = _irc_to_mc_mention(text, self.bridge)
-            max_len = self.bridge.config.get('meshcore', {}).get('max_msg_len', 200)
+            max_len = 200
             byte_len = len(mc_text.encode('utf-8'))
             if byte_len > max_len:
                 self.send(f":{BOT_NICK}!bot@meshcore PRIVMSG {target} :Msg too long: {byte_len}/{max_len} (+{byte_len - max_len})")
@@ -460,7 +460,7 @@ class IRCClient:
         contact = self.bridge.contact_for_nick(target)
         if contact:
             if contact.get('type', 0) != 2:
-                max_len = self.bridge.config.get('meshcore', {}).get('max_msg_len', 200)
+                max_len = 200
                 byte_len = len(text.encode('utf-8'))
                 if byte_len > max_len:
                     self.send(f":{target}!meshcore@meshcore PRIVMSG {self.nick} :Msg too long: {byte_len}/{max_len} (+{byte_len - max_len})")
@@ -1190,7 +1190,7 @@ class IRCClient:
                 nick = sanitize_nick(contact['adv_name'])
                 self.bridge.repeater_sessions[nick.lower()] = contact
                 reply_fn(f"Logged in to {contact['adv_name']} ({role})")
-                self._repeater_msg(contact, f"Session open ({role}) — commands: status  neighbours  expand  synctime  telemetry  advert  zeroadvert  cli <cmd>  logout")
+                self._repeater_msg(contact, f"Session open ({role}) — commands: status  neighbours  expand  synctime  telemetry  advert  zeroadvert  resetpath  cli <cmd>  logout")
             else:
                 reply_fn(f"Login to {contact['adv_name']} failed or timed out")
         except Exception as e:
@@ -1307,8 +1307,10 @@ class IRCClient:
         elif cmd == 'deletepassword':
             nick = sanitize_nick(contact['adv_name'])
             self._bot_deletepassword(nick, reply_fn=reply)
+        elif cmd == 'resetpath':
+            asyncio.create_task(self._bot_resetpath(contact=contact, reply_fn=reply))
         else:
-            self._repeater_msg(contact, "Commands: login [pwd]  logout  synctime  telemetry  advert  zeroadvert  status  neighbours  expand  savepassword <pwd>  deletepassword  cli <cmd>")
+            self._repeater_msg(contact, "Commands: login [pwd]  logout  synctime  telemetry  advert  zeroadvert  status  neighbours  expand  resetpath  savepassword <pwd>  deletepassword  cli <cmd>")
 
     async def _bot_status(self, contact: dict, reply_fn=None):
         if reply_fn is None:
@@ -1699,18 +1701,21 @@ class IRCClient:
                     break
         return contact
 
-    async def _bot_resetpath(self, arg: str):
-        contact = self._resolve_contact_for_path_cmd(arg)
+    async def _bot_resetpath(self, arg: str = '', contact: dict = None, reply_fn=None):
+        if reply_fn is None:
+            reply_fn = self._bot_msg
+        if contact is None:
+            contact = self._resolve_contact_for_path_cmd(arg)
         if not contact:
-            self._bot_msg(f"Contact not found: {arg}  (try: contacts)")
+            reply_fn(f"Contact not found: {arg}  (try: contacts)")
             return
         if not self.bridge.mc:
-            self._bot_msg("MeshCore not connected")
+            reply_fn("MeshCore not connected")
             return
         pubkey = contact.get('public_key', '')
         name = contact.get('adv_name', arg)
         if pubkey not in self.bridge.mc.contacts:
-            self._bot_msg(f"{name} [{pubkey[:12]}] is not a saved contact on the companion")
+            reply_fn(f"{name} [{pubkey[:12]}] is not a saved contact on the companion")
             return
         try:
             ev = await self.bridge.mc.commands.reset_path(bytes.fromhex(pubkey))
@@ -1723,12 +1728,12 @@ class IRCClient:
                 if self.bridge.node_cache:
                     self.bridge.node_cache.update(contact)
                     self.bridge.node_cache.flush()
-                self._bot_msg(f"Path reset (flood) for {name} [{pubkey[:12]}]")
+                reply_fn(f"Path reset (flood) for {name} [{pubkey[:12]}]")
             else:
                 reason = ev.payload.get('reason', '?') if ev else 'no response'
-                self._bot_msg(f"resetpath failed for {name}: {reason}")
+                reply_fn(f"resetpath failed for {name}: {reason}")
         except Exception as e:
-            self._bot_msg(f"resetpath error: {e}")
+            reply_fn(f"resetpath error: {e}")
 
     async def _bot_setpath(self, arg: str, path_arg: str):
         contact = self._resolve_contact_for_path_cmd(arg)

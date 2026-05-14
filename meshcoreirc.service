@@ -1,0 +1,16 @@
+[Unit]
+Description=MeshCore IRC Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=meshcoreirc
+Group=meshcoreirc
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/meshcoreirc
+ExecStart=/opt/meshcoreirc/.venv/bin/python3 main.py
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

@@ -18,8 +18,8 @@ member_timeout = 3600        # optional — seconds of silence before a channel
                              #   member is removed from the user list (default: 3600)
 voice_timeout  = 600         # optional — seconds after last message before a
                              #   channel member loses voice (+v) status (default: 600)
-away_timeout   = 900         # optional — seconds of silence before a channel member
-                             #   is marked as away (+a) in the user list (default: 900)
+away_timeout   = 1800        # optional — seconds of silence before a channel member
+                             #   is marked as away (+a) in the user list (default: 1800)
 
 # TLS (SSL) listener — runs alongside the plain port when configured.
 # A self-signed certificate is generated automatically if the files do not exist.
@@ -65,8 +65,8 @@ path_color_target      = "#e74c3c"                # target node
 path_color_remote      = "#888888"                # node with meshcore.io-sourced location
 path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-position label
 
-# Line weight for edges on neighbour maps
-# neighbours_line_weight = 2.0        # optional (default: 2.0)
+# Line weight for edges on /map/neighbours/<name>
+# neighbours_line_weight = 1.5        # optional (default: 1.5)
 
 # Line thickness range on /map/heath/Xb — thinnest line (1 packet) to thickest (most packets)
 # heath_line_weight_min = 3.0         # optional (default: 3.0)
@@ -78,9 +78,9 @@ path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-positi
 
 # meshcore.io location lookup (used to resolve unknown ?hash nodes on path maps)
 # Please keep the refresh interval at 48 h or longer to avoid overloading meshcore.io.
-# meshcore_map_url            = "https://meshcore.io/nodes.json"
-# meshcore_map_cache          = "meshcore_map.json"  # local cache file
-# meshcore_map_refresh_hours  = 48    # re-fetch interval in hours — keep ≥ 48 to be a good citizen (default: 48)
+# meshcore_map_url            = "https://map.meshcore.io/api/v1/nodes"
+# meshcore_map_cache          = "meshcore_map_cache.json"  # local cache file
+# meshcore_map_refresh_hours  = 48    # re-fetch interval in hours — keep ≥ 48 (default: 48)
 # meshcore_map_max_hop_km     = 100.0 # discard resolved positions farther than this from their
                                       #   neighbour (prevents wildly wrong matches)
 

@@ -142,6 +142,7 @@ class MeshCoreHandler:
         text = payload.get('text', '')
         path_len = payload.get('path_len', -1)
 
+        contact = None
         if pubkey_prefix:
             contact = self.bridge.contact_for_pubkey_prefix(pubkey_prefix)
             nick = (self.bridge.assign_contact_nick(contact.get('adv_name', 'unknown'))
@@ -181,7 +182,19 @@ class MeshCoreHandler:
 
         irc_channel = self.bridge.irc_channel_for_idx(channel_idx)
         self.bridge.update_channel_member(irc_channel, nick, host, path_len=path_len)
-        hops_suffix = f' [hops:{path_len}]' if path_len >= 0 else ''
+        dist_str = ''
+        if path_len >= 0:
+            src_lat = contact.get('adv_lat', 0.0) if contact else 0.0
+            src_lon = contact.get('adv_lon', 0.0) if contact else 0.0
+            if not (src_lat or src_lon):
+                src_lat, src_lon = self._loc_for_nick(nick)
+            si = self.bridge.self_info
+            dst_lat = si.get('adv_lat', 0.0) if si else 0.0
+            dst_lon = si.get('adv_lon', 0.0) if si else 0.0
+            if (src_lat or src_lon) and (dst_lat or dst_lon):
+                dist = self.bridge.distance_km(src_lat, src_lon, dst_lat, dst_lon)
+                dist_str = f', dist:{dist:.0f}km'
+        hops_suffix = f' [hops:{path_len}{dist_str}]' if path_len >= 0 else ''
         self.bridge.broadcast(f":{nick}!{host}@meshcore PRIVMSG {irc_channel} :{_mc_to_irc_mention(text, self.bridge)}{hops_suffix}")
 
     @staticmethod
@@ -299,12 +312,12 @@ class MeshCoreHandler:
         if hops < 0:
             hops = contact.get('out_path_len', -1)
         nick = self.bridge.assign_contact_nick(name)
+        via = self.bridge.advert_path_nodes_by_pubkey.get(pubkey, []) if hops >= 0 else []
 
         parts = [f"Advert: {nick} [{pubkey[:12]}]"]
         if lat or lon:
             parts.append(f"pos={lat:.4f},{lon:.4f}")
         if hops >= 0:
-            via = self.bridge.advert_path_nodes_by_pubkey.get(pubkey, [])
             hops_str = f"hops={hops}"
             if via:
                 hops_str += " via " + " → ".join(via)
@@ -312,12 +325,44 @@ class MeshCoreHandler:
         else:
             parts.append("flood")
 
+        # Distance: from first node with known position to our location (or last known via node)
+        src_lat, src_lon = lat, lon
+        if not (src_lat or src_lon):
+            for v in via:
+                vl, vn = self._loc_for_nick(v)
+                if vl or vn:
+                    src_lat, src_lon = vl, vn
+                    break
+        if src_lat or src_lon:
+            si = self.bridge.self_info
+            dst_lat = si.get('adv_lat', 0.0) if si else 0.0
+            dst_lon = si.get('adv_lon', 0.0) if si else 0.0
+            if not (dst_lat or dst_lon):
+                for v in reversed(via):
+                    vl, vn = self._loc_for_nick(v)
+                    if vl or vn:
+                        dst_lat, dst_lon = vl, vn
+                        break
+            if dst_lat or dst_lon:
+                dist = self.bridge.distance_km(src_lat, src_lon, dst_lat, dst_lon)
+                parts.append(f"dist={dist:.1f}km")
+
         last = contact.get('last_advert', 0)
         if last:
             dt = datetime.fromtimestamp(last, tz=timezone.utc).strftime('%H:%M:%S UTC')
             parts.append(dt)
 
         self.bridge.broadcast_system('  '.join(parts))
+
+    def _loc_for_nick(self, nick: str) -> tuple:
+        """Return (lat, lon) for a via node nick from node_cache, or (0, 0) if unknown."""
+        if not self.bridge.node_cache or nick.startswith('?'):
+            return 0.0, 0.0
+        result = self.bridge.node_cache.get_by_nick(nick)
+        if result:
+            _, entry = result
+            return entry.get('lat', 0.0), entry.get('lon', 0.0)
+        return 0.0, 0.0
 
     def _save_hops_cache(self):
         if self.bridge.node_cache:

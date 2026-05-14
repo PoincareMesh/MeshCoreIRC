@@ -56,6 +56,68 @@ python3 main.py
 
 Stop with `Ctrl+C`.
 
+### Running as a systemd service
+
+A unit file `meshcoreirc.service` is included. It assumes the gateway is installed at
+`/opt/meshcoreirc` and runs as a dedicated `meshcoreirc` user.
+
+**1. Create a dedicated user**
+
+```bash
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin meshcoreirc
+```
+
+**2. Install the gateway**
+
+```bash
+sudo cp -r /path/to/meshcoreirc /opt/meshcoreirc
+sudo chown -R meshcoreirc:meshcoreirc /opt/meshcoreirc
+cd /opt/meshcoreirc
+sudo -u meshcoreirc python3 -m venv .venv
+sudo -u meshcoreirc .venv/bin/pip install -r requirements.txt
+sudo cp config.toml.example config.toml   # then edit config.toml
+```
+
+**3. Grant serial port access**
+
+The user must be in the `dialout` group (already set in the unit file via `SupplementaryGroups`):
+
+```bash
+sudo usermod -aG dialout meshcoreirc
+```
+
+**4. Adjust the unit file if needed**
+
+If your install path or user name differ, edit `meshcoreirc.service` before installing:
+
+```ini
+WorkingDirectory=/opt/meshcoreirc   # change to your actual path
+User=meshcoreirc                    # change to your actual user
+Group=meshcoreirc                   # change to your actual group
+ExecStart=/opt/meshcoreirc/.venv/bin/python3 main.py
+```
+
+**5. Install and enable the service**
+
+```bash
+sudo cp /opt/meshcoreirc/meshcoreirc.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now meshcoreirc
+```
+
+**Managing the service**
+
+```bash
+sudo systemctl status meshcoreirc      # check status
+sudo systemctl restart meshcoreirc     # restart after config changes
+sudo systemctl stop meshcoreirc        # stop
+sudo journalctl -u meshcoreirc -f      # follow live logs
+sudo journalctl -u meshcoreirc -n 100  # last 100 log lines
+```
+
+> **Log file vs journal:** By default, logs go to the systemd journal. If you also set
+> `[log] file = "meshcoreirc.log"` in `config.toml`, logs are written to both.
+
 ## Connecting with an IRC client
 
 The server requires a **server password** for authentication. Use the PASS method when connecting — not NickServ or SASL.
