@@ -324,6 +324,8 @@ class IRCClient:
             for ch in self.bridge.all_irc_channels():
                 await self._do_join(ch)
 
+        self.send(f":{BOT_NICK}!bot@meshcore PRIVMSG {self.nick} :Type 'help' for a list of commands.")
+
     def _send_motd(self):
         self.numeric('375', ':- meshcoreirc Message of the Day -')
         self.numeric('372', ':- MeshCore IRC Gateway')
@@ -357,7 +359,7 @@ class IRCClient:
         self.numeric('372', ':-   addchannel <name>          join MeshCore channel (auto slot)')
         self.numeric('372', ':-   addchannel <idx> <name>    join MeshCore channel at specific slot')
         self.numeric('372', ':-   deletechannel <name|#ch|idx>  delete a channel from companion')
-        self.numeric('372', ':-   addcontact <nick|pubkey>                save discovered contact to companion')
+        self.numeric('372', ':-   addcontact <nick|pubkey> [name]          save contact (name optional for pubkey add)')
         self.numeric('372', ':-   removecontact <nick|pubkey>             remove contact from companion')
         self.numeric('372', ':-   renamecontact <nick|pubkey> <new name>  rename a saved contact')
         self.numeric('372', ':-   resetpath <nick|pubkey>                 reset path to flood (auto-learn)')
@@ -566,7 +568,7 @@ class IRCClient:
                 "── Contacts ──────────────────────────────────────────",
                 "  contacts <all|repeater|companion|sensor|room> [filter]",
                 "  discovered <all|repeater|companion|sensor|room> [filter]",
-                "  addcontact <nick|pubkey>     save a discovered contact",
+                "  addcontact <nick|pubkey> [name]  save a contact (name optional for pubkey add)",
                 "  removecontact <nick|pubkey>  remove a saved contact from companion",
                 "  renamecontact <nick|pubkey> <new name>  rename a saved contact",
                 "  resetpath <nick|pubkey>      reset path to flood (auto-learn)",
@@ -811,11 +813,12 @@ class IRCClient:
             self._bot_listchannels()
 
         elif cmd == 'addcontact':
-            arg = ' '.join(parts[1:]).strip()
-            if not arg:
-                self._bot_msg("Usage: addcontact <nick>  or  addcontact <64-char pubkey>")
+            if len(parts) < 2:
+                self._bot_msg("Usage: addcontact <nick|pubkey> [name]")
                 return
-            asyncio.create_task(self._bot_addcontact(arg))
+            identifier = parts[1].strip()
+            given_name = parts[2].strip() if len(parts) > 2 else ''
+            asyncio.create_task(self._bot_addcontact(identifier, given_name))
 
         elif cmd == 'removecontact':
             arg = ' '.join(parts[1:]).strip()
@@ -1608,8 +1611,8 @@ class IRCClient:
             irc_ch = self.bridge.irc_channel_for_idx(idx)
             self._bot_msg(f"  [{idx}] {name} → {irc_ch}")
 
-    async def _bot_addcontact(self, arg: str):
-        arg = arg.strip()
+    async def _bot_addcontact(self, arg: str, given_name: str = ''):
+        arg = arg.strip().strip('[]')
         arg_lower = arg.lower()
 
         # 1. bridge.contacts by nick
@@ -1645,34 +1648,56 @@ class IRCClient:
                         'adv_lat': found_entry.get('lat', 0.0),
                         'adv_lon': found_entry.get('lon', 0.0),
                     }
+        is_pubkey_only = False
         if not contact:
-            self._bot_msg(f"Contact not found: {arg}  (try: discovered)")
-            return
+            if len(arg_lower) == 64 and all(c in '0123456789abcdef' for c in arg_lower):
+                contact = {
+                    'public_key': arg_lower,
+                    'adv_name': given_name,
+                    'type': 1,  # companion — will be corrected on first advert
+                    'flags': 0,
+                    'out_path': '0' * 128,
+                    'out_path_len': -1,
+                    'out_path_hash_mode': 0,
+                    'last_advert': 0,
+                    'adv_lat': 0.0,
+                    'adv_lon': 0.0,
+                }
+                is_pubkey_only = True
+            else:
+                self._bot_msg(f"Contact not found: {arg}  (try: discovered)")
+                return
 
         if not self.bridge.mc:
             self._bot_msg("MeshCore not connected")
             return
 
         pubkey = contact.get('public_key', '')
-        name = contact.get('adv_name', arg)
-        nick = sanitize_nick(name)
+        name = given_name or contact.get('adv_name', '')
+        if given_name and contact.get('adv_name') != given_name:
+            contact['adv_name'] = given_name
+        nick = sanitize_nick(name) if name else None
 
         if pubkey in self.bridge.mc.contacts:
-            self._bot_msg(f"Already saved: {name} [{pubkey[:12]}]  —  /msg {nick} <text>")
+            existing_name = self.bridge.mc.contacts[pubkey].get('adv_name', '') or pubkey[:12]
+            self._bot_msg(f"Already saved: {existing_name} [{pubkey[:12]}]")
             return
 
         try:
             ev = await self.bridge.mc.commands.add_contact(contact)
             if ev and not ev.is_error():
                 self.bridge.mc.contacts[pubkey] = contact
-                self._bot_msg(f"Saved to companion: {name} [{pubkey[:12]}]  —  /msg {nick} <text>")
+                if name:
+                    self._bot_msg(f"Saved to companion: {name} [{pubkey[:12]}]  —  /msg {nick} <text>")
+                else:
+                    self._bot_msg(f"Saved to companion: [{pubkey[:12]}] (name unknown — will update on first advert)")
             else:
-                self._bot_msg(f"Failed to save contact: {name}")
+                self._bot_msg(f"Failed to save contact: {name or pubkey[:12]}")
         except Exception as e:
             self._bot_msg(f"addcontact error: {e}")
 
     async def _bot_removecontact(self, arg: str):
-        arg = arg.strip()
+        arg = arg.strip().strip('[]')
 
         # Resolve by nick, full pubkey, or pubkey prefix
         contact = self.bridge.contact_for_nick(arg)
@@ -1709,7 +1734,7 @@ class IRCClient:
             self._bot_msg(f"removecontact error: {e}")
 
     async def _bot_renamecontact(self, arg: str, new_name: str):
-        arg = arg.strip()
+        arg = arg.strip().strip('[]')
         new_name = new_name.strip()
         if not new_name:
             self._bot_msg("Usage: renamecontact <nick|pubkey> <new name>")
@@ -1761,6 +1786,7 @@ class IRCClient:
             self._bot_msg(f"renamecontact error: {e}")
 
     def _resolve_contact_for_path_cmd(self, arg: str):
+        arg = arg.strip().strip('[]')
         contact = self.bridge.contact_for_nick(arg)
         if not contact:
             arg_lower = arg.lower()
@@ -1860,6 +1886,7 @@ class IRCClient:
 
     def _resolve_contact_for_flags(self, arg: str):
         """Resolve nick/pubkey to a saved contact dict (must be in mc.contacts for flag changes)."""
+        arg = arg.strip().strip('[]')
         contact = self.bridge.contact_for_nick(arg)
         if not contact:
             arg_lower = arg.lower()

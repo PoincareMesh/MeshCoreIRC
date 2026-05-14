@@ -261,6 +261,7 @@ class Bridge:
         return self.assign_contact_nick(contact.get('adv_name', 'unknown'))
 
     def contact_for_nick(self, nick: str) -> Optional[dict]:
+        nick = nick.strip().strip('[]')
         nick_lower = sanitize_nick(nick).lower()  # normalise spaces→_ before comparing
         for c in self.contacts.values():
             if sanitize_nick(c.get('adv_name', '')).lower() == nick_lower:
@@ -298,7 +299,7 @@ class Bridge:
         return None
 
     def contact_for_pubkey_prefix(self, prefix: str) -> Optional[dict]:
-        prefix_lower = prefix.lower().strip()
+        prefix_lower = prefix.strip().strip('[]').lower()
         if not prefix_lower:
             return None
         for pubkey, c in self.contacts.items():
