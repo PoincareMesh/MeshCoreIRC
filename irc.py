@@ -353,8 +353,10 @@ class IRCClient:
         self.numeric('372', ':-   refreshcontacts            refresh contact list from companion')
         self.numeric('372', ':-   zeroadvert                 send self-advertisement (zero-hop)')
         self.numeric('372', ':-   floodadvert                send self-advertisement (flood)')
+        self.numeric('372', ':-   listchannels               list all configured channel slots')
         self.numeric('372', ':-   addchannel <name>          join MeshCore channel (auto slot)')
         self.numeric('372', ':-   addchannel <idx> <name>    join MeshCore channel at specific slot')
+        self.numeric('372', ':-   deletechannel <name|#ch|idx>  delete a channel from companion')
         self.numeric('372', ':-   addcontact <nick|pubkey>                save discovered contact to companion')
         self.numeric('372', ':-   removecontact <nick|pubkey>             remove contact from companion')
         self.numeric('372', ':-   renamecontact <nick|pubkey> <new name>  rename a saved contact')
@@ -557,8 +559,10 @@ class IRCClient:
                 "  get tuning|bat|stats|deviceinfo|customs",
                 "  refreshcontacts              refresh contact list from companion",
                 "  zeroadvert / floodadvert     send self-advertisement",
+                "  listchannels                 list all configured channel slots",
                 "  addchannel <name>            join MeshCore channel (auto slot)",
                 "  addchannel <idx> <name>      join channel at specific slot",
+                "  deletechannel <name|#ch|idx> delete a channel from companion",
                 "── Contacts ──────────────────────────────────────────",
                 "  contacts <all|repeater|companion|sensor|room> [filter]",
                 "  discovered <all|repeater|companion|sensor|room> [filter]",
@@ -789,6 +793,16 @@ class IRCClient:
                 self._bot_msg("Usage: addchannel <name>  or  addchannel <idx> <name>")
                 return
             asyncio.create_task(self._bot_addchannel(parts[1], parts[2] if len(parts) > 2 else None))
+
+        elif cmd == 'deletechannel':
+            arg = ' '.join(parts[1:]).strip()
+            if not arg:
+                self._bot_msg("Usage: deletechannel <name|#channel|idx>")
+                return
+            asyncio.create_task(self._bot_deletechannel(arg))
+
+        elif cmd == 'listchannels':
+            self._bot_listchannels()
 
         elif cmd == 'addcontact':
             arg = ' '.join(parts[1:]).strip()
@@ -1538,6 +1552,55 @@ class IRCClient:
                 self._bot_msg(f"Failed to set channel slot {idx}")
         except Exception as e:
             self._bot_msg(f"addchannel error: {e}")
+
+    async def _bot_deletechannel(self, arg: str):
+        if not self.bridge.mc:
+            self._bot_msg("MeshCore not connected")
+            return
+
+        # Resolve arg to a slot index
+        idx = None
+        # Try numeric slot
+        try:
+            candidate = int(arg)
+            if candidate in self.bridge.channels:
+                idx = candidate
+            else:
+                self._bot_msg(f"No channel in slot {candidate}")
+                return
+        except ValueError:
+            # Try IRC channel name or bare name match
+            arg_lower = arg.lower().lstrip('#')
+            for i, name in self.bridge.channels.items():
+                if (self.bridge.irc_channel_for_idx(i).lower().lstrip('#') == arg_lower
+                        or name.lower() == arg_lower):
+                    idx = i
+                    break
+            if idx is None:
+                self._bot_msg(f"Channel not found: {arg}")
+                return
+
+        irc_channel = self.bridge.irc_channel_for_idx(idx)
+        chan_name = self.bridge.channels[idx]
+        try:
+            ev = await self.bridge.mc.commands.set_channel(idx, '')
+            if ev and not ev.is_error():
+                del self.bridge.channels[idx]
+                self.bridge.part_all_clients_from_channel(irc_channel, 'Channel deleted')
+                self._bot_msg(f"Channel deleted: {chan_name} (slot {idx})")
+            else:
+                self._bot_msg(f"Failed to delete channel slot {idx}")
+        except Exception as e:
+            self._bot_msg(f"deletechannel error: {e}")
+
+    def _bot_listchannels(self):
+        if not self.bridge.channels:
+            self._bot_msg("No channels configured")
+            return
+        for idx in sorted(self.bridge.channels):
+            name = self.bridge.channels[idx]
+            irc_ch = self.bridge.irc_channel_for_idx(idx)
+            self._bot_msg(f"  [{idx}] {name} → {irc_ch}")
 
     async def _bot_addcontact(self, arg: str):
         arg = arg.strip()

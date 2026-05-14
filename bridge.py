@@ -457,6 +457,14 @@ class Bridge:
                 client.send(f":{SERVER_NAME} 366 {client.nick} {channel} :End of /NAMES list")
                 client.send(f":{SERVER_NAME} MODE {channel} +o {client.nick}")
 
+    def part_all_clients_from_channel(self, channel: str, reason: str = 'Channel deleted'):
+        ch_lower = channel.lower()
+        for client in list(self.irc_clients):
+            if client.registered and ch_lower in client.joined_channels:
+                client.joined_channels.discard(ch_lower)
+                client.send(f":{client.prefix} PART {channel} :{reason}")
+        self.channel_members.pop(ch_lower, None)
+
     def resync_irc_clients_to_channels(self):
         """Part clients from stale channels, join them to the current real channel list.
 
