@@ -66,9 +66,11 @@ class Bridge:
         # Block list: channel messages from these users are silently dropped.
         self._blocklist: list = []        # [{'nick': str, 'pubkey_prefix': str}, ...]
         self._blocklist_file: str = ''
+        self._blocklist_dirty: bool = False
         # Repeater password store: saved login passwords, keyed by lowercase nick.
         self._passwords: dict = {}
         self._passwords_file: str = ''
+        self._passwords_dirty: bool = False
 
     # ── Block list ────────────────────────────────────────────────────────────
 
@@ -86,10 +88,11 @@ class Bridge:
             self._blocklist = []
 
     def save_blocklist(self):
-        if not self._blocklist_file:
+        if not self._blocklist_file or not self._blocklist_dirty:
             return
         try:
             Path(self._blocklist_file).write_text(json.dumps(self._blocklist, indent=2))
+            self._blocklist_dirty = False
         except Exception as e:
             logger.error("Could not save blocklist to %s: %s", self._blocklist_file, e)
 
@@ -107,7 +110,7 @@ class Bridge:
     def block_add(self, nick: str, pubkey_prefix: str = ''):
         if not self.is_blocked(nick, pubkey_prefix):
             self._blocklist.append({'nick': nick, 'pubkey_prefix': pubkey_prefix})
-            self.save_blocklist()
+            self._blocklist_dirty = True
             return True
         return False
 
@@ -116,7 +119,7 @@ class Bridge:
         before = len(self._blocklist)
         self._blocklist = [e for e in self._blocklist if e['nick'].lower() != nick_lower]
         if len(self._blocklist) < before:
-            self.save_blocklist()
+            self._blocklist_dirty = True
             return True
         return False
 
@@ -140,16 +143,17 @@ class Bridge:
             self._passwords = {}
 
     def save_passwords(self):
-        if not self._passwords_file:
+        if not self._passwords_file or not self._passwords_dirty:
             return
         try:
             Path(self._passwords_file).write_text(json.dumps(self._passwords, indent=2))
+            self._passwords_dirty = False
         except Exception as e:
             logger.error("Could not save passwords to %s: %s", self._passwords_file, e)
 
     def password_set(self, nick: str, pwd: str):
         self._passwords[nick.lower()] = pwd
-        self.save_passwords()
+        self._passwords_dirty = True
 
     def password_get(self, nick: str) -> str:
         return self._passwords.get(nick.lower(), '')
@@ -157,7 +161,7 @@ class Bridge:
     def password_delete(self, nick: str) -> bool:
         if nick.lower() in self._passwords:
             del self._passwords[nick.lower()]
-            self.save_passwords()
+            self._passwords_dirty = True
             return True
         return False
 

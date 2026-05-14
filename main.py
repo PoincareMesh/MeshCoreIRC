@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -53,6 +54,20 @@ def setup_logging(config: dict):
 logger = logging.getLogger(__name__)
 
 
+async def _flush_loop(bridge, interval_hours: float):
+    interval = max(interval_hours * 3600, 60)
+    while True:
+        await asyncio.sleep(interval)
+        _flush_all(bridge)
+
+
+def _flush_all(bridge):
+    if bridge.node_cache:
+        bridge.node_cache.flush_if_dirty()
+    bridge.save_blocklist()
+    bridge.save_passwords()
+
+
 def load_config(path: Path) -> dict:
     with open(path, 'rb') as f:
         return tomllib.load(f)
@@ -98,10 +113,14 @@ async def main():
         config['irc']['port'],
     )
 
+    write_interval = float(cache_cfg.get('write_interval_hours', 1))
+    logger.info("Cache write interval: %.1f h", write_interval)
+
     tasks = [
         MeshCoreHandler(bridge).run(),
         IRCServer(bridge).run(),
         run_refresh_loop(bridge.meshcore_map),
+        _flush_loop(bridge, write_interval),
     ]
     web_cfg = config.get('webserver', {})
     if web_cfg:
@@ -111,11 +130,22 @@ async def main():
         public = web_cfg.get('url', f"http://{config['irc']['host']}:{port}")
         logger.info("Map web server: %s/map", public)
 
-    await asyncio.gather(*tasks)
+    loop = asyncio.get_running_loop()
+
+    def _on_shutdown():
+        logger.info("Shutdown signal received — flushing caches")
+        _flush_all(bridge)
+        for t in asyncio.all_tasks(loop):
+            t.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_shutdown)
+    loop.add_signal_handler(signal.SIGINT, _on_shutdown)
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
 
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Shutting down")
+    asyncio.run(main())

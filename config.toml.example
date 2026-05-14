@@ -90,6 +90,11 @@ file          = "nodes.json"      # optional — unified node cache (default: no
 max_age_hours = 336               # optional — discard cache entries older than this
                                   #   (default: 336 = 14 days)
 
+# How often the JSON cache files are flushed to disk (default: 1 h).
+# Increase this on Raspberry Pi / SD-card systems to reduce write wear.
+# Files are also flushed immediately on SIGTERM / SIGINT (clean shutdown).
+# write_interval_hours = 1
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 [log]
 file  = "meshcoreirc.log"    # optional — log file path; omit to log to stdout only

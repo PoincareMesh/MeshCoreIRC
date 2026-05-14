@@ -7,10 +7,10 @@ Type=simple
 User=meshcoreirc
 Group=meshcoreirc
 SupplementaryGroups=dialout
-WorkingDirectory=/opt/meshcoreirc
-ExecStart=/opt/meshcoreirc/.venv/bin/python3 main.py
+WorkingDirectory=/home/meshcoreirc/MeshCoreIRC
+ExecStart=/home/meshcoreirc/MeshCoreIRC/.venv/bin/python3 main.py
 Restart=on-failure
-RestartSec=5s
+RestartSec=30s
 
 [Install]
 WantedBy=multi-user.target

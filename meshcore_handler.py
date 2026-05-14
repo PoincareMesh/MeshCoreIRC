@@ -304,7 +304,6 @@ class MeshCoreHandler:
             self.bridge.contacts[pubkey] = contact
             if self.bridge.node_cache:
                 self.bridge.node_cache.update(contact)
-                self.bridge.node_cache.flush()
         lat = contact.get('adv_lat', 0.0)
         lon = contact.get('adv_lon', 0.0)
         # Prefer the incoming advert path length over the stored outgoing path length
@@ -365,15 +364,12 @@ class MeshCoreHandler:
         return 0.0, 0.0
 
     def _save_hops_cache(self):
-        if self.bridge.node_cache:
-            self.bridge.node_cache.flush()
+        pass  # periodic flush in main.py handles writes
 
     async def _expire_members_loop(self):
         while True:
             await asyncio.sleep(60)
             self.bridge.expire_channel_members()
-            if self.bridge.node_cache:
-                self.bridge.node_cache.flush_if_dirty()
 
     def _on_new_contact(self, event):
         contact = event.payload
