@@ -90,7 +90,7 @@ class NodeCache:
                     hash_mode: int = -1):
         """Update advert hop-path data for a full-pubkey entry."""
         if pubkey not in self._data:
-            self._data[pubkey] = {'last_seen': time.time()}
+            self._data[pubkey] = {'adv_name': '', 'last_seen': time.time()}
         e = self._data[pubkey]
         e['advert_path_len'] = path_len
         e['advert_path_nodes'] = list(path_nodes)

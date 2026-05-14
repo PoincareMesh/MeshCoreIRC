@@ -154,6 +154,7 @@ class Bridge:
     def password_set(self, nick: str, pwd: str):
         self._passwords[nick.lower()] = pwd
         self._passwords_dirty = True
+        self.save_passwords()
 
     def password_get(self, nick: str) -> str:
         return self._passwords.get(nick.lower(), '')
@@ -162,6 +163,7 @@ class Bridge:
         if nick.lower() in self._passwords:
             del self._passwords[nick.lower()]
             self._passwords_dirty = True
+            self.save_passwords()
             return True
         return False
 
@@ -271,7 +273,7 @@ class Bridge:
                     return {
                         'public_key': '',
                         '_pubkey_prefix': key[2:],
-                        'adv_name': entry['adv_name'],
+                        'adv_name': entry.get('adv_name', ''),
                         'type': 0,
                         'flags': 0,
                         'out_path': '0' * 128,
@@ -283,7 +285,7 @@ class Bridge:
                     }
                 return {
                     'public_key': key,
-                    'adv_name': entry['adv_name'],
+                    'adv_name': entry.get('adv_name', ''),
                     'type': entry.get('node_type', 0),
                     'flags': 0,
                     'out_path': entry.get('out_path', '0' * 128),
@@ -326,7 +328,7 @@ class Bridge:
             for pubkey, entry in self.node_cache.all_items():
                 if pubkey not in merged:
                     merged[pubkey] = {
-                        'adv_name': entry['adv_name'],
+                        'adv_name': entry.get('adv_name', ''),
                         'adv_lat': entry.get('lat', 0.0),
                         'adv_lon': entry.get('lon', 0.0),
                         'type': entry.get('node_type', 0),

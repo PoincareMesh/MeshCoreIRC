@@ -618,6 +618,7 @@ class IRCClient:
                 return
 
             self._bot_msg(f"Contacts ({filter_arg}{', ' + name_filter if name_filter else ''}, {len(saved)}):")
+            now = time.time()
             for pubkey, c in sorted(saved.items(), key=lambda kv: kv[1].get('adv_name', '').lower()):
                 node_type = c.get('type', 0)
                 type_label = _NODE_TYPE_LABEL.get(node_type, '?')
@@ -626,7 +627,9 @@ class IRCClient:
                 hop_str = f"  hops={hops}" if hops >= 0 else ""
                 perm_str = _fmt_telem_perms(c.get('flags', 0))
                 perm_str = f"  [{perm_str}]" if perm_str else ""
-                self._bot_msg(f"  [{type_label}] {nick:<22} [{pubkey[:12]}]{hop_str}{perm_str}")
+                ts = self.bridge.advert_last_ts_by_pubkey.get(pubkey, 0)
+                adv_str = f"  adv:{_fmt_age(now - ts)}" if ts else "  adv:never"
+                self._bot_msg(f"  [{type_label}] {nick:<22} [{pubkey[:12]}]{hop_str}{perm_str}{adv_str}")
             if not name_filter:
                 url = self._map_url('contacts', filter_arg)
                 if url:
@@ -656,7 +659,7 @@ class IRCClient:
                 for pubkey, entry in cache.all_items():
                     if pubkey not in merged:
                         merged[pubkey] = {
-                            'adv_name': entry['adv_name'],
+                            'adv_name': entry.get('adv_name', ''),
                             'adv_lat':  entry.get('lat', 0.0),
                             'adv_lon':  entry.get('lon', 0.0),
                             'type':     entry.get('node_type', 0),
@@ -677,6 +680,7 @@ class IRCClient:
                 return
 
             self._bot_msg(f"Discovered ({filter_arg}{', ' + name_filter if name_filter else ''}, {len(merged)}):")
+            now = time.time()
             for pubkey, c in sorted(merged.items(),
                                     key=lambda kv: kv[1].get('adv_name', '').lower()):
                 node_type = c.get('type', 0)
@@ -685,7 +689,9 @@ class IRCClient:
                 hops = c.get('out_path_len', -1)
                 hop_str = f"  hops={hops}" if hops >= 0 else ""
                 saved_str = "  (saved)" if c.get('_saved') else ""
-                self._bot_msg(f"  [{type_label}] {nick:<22} [{pubkey[:12]}]{hop_str}{saved_str}")
+                ts = self.bridge.advert_last_ts_by_pubkey.get(pubkey, 0)
+                adv_str = f"  adv:{_fmt_age(now - ts)}" if ts else "  adv:never"
+                self._bot_msg(f"  [{type_label}] {nick:<22} [{pubkey[:12]}]{hop_str}{saved_str}{adv_str}")
             if not name_filter:
                 url = self._map_url('discovered', filter_arg)
                 if url:
@@ -1629,7 +1635,7 @@ class IRCClient:
                 if found_entry:
                     contact = {
                         'public_key': found_pubkey,
-                        'adv_name': found_entry['adv_name'],
+                        'adv_name': found_entry.get('adv_name', ''),
                         'type': found_entry.get('node_type', 0),
                         'flags': 0,
                         'out_path': found_entry.get('out_path', '0' * 128),
