@@ -42,10 +42,15 @@ MIN_REUPLOAD_INTERVAL = 3600
 
 
 def _radio_params(bridge) -> dict:
+    """Return the radio settings as the map API expects them: freq in MHz, bw in kHz.
+
+    The python-meshcore lib already reports these in MHz / kHz (see how nodeinfo
+    prints them), so unlike the JS reference uploader we do *not* divide by 1000.
+    """
     si = bridge.self_info or {}
     return {
-        'freq': si.get('radio_freq', 0) / 1000.0,
-        'bw':   si.get('radio_bw', 0) / 1000.0,
+        'freq': si.get('radio_freq', 0),
+        'bw':   si.get('radio_bw', 0),
         'sf':   si.get('radio_sf', 0),
         'cr':   si.get('radio_cr', 0),
     }
@@ -106,7 +111,19 @@ async def upload_node(bridge, pubkey: str, raw_advert_hex: str,
     }).encode('utf-8')
 
     status, body = await asyncio.to_thread(_post, url, request_body)
-    if 200 <= status < 300:
+    body_short = body.strip()[:200]
+    # The API sometimes returns HTTP 200 with {"error": "...", "code": "..."} —
+    # treat any body containing an "error" key as a failure.
+    api_error = None
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict) and parsed.get('error'):
+            api_error = f"{parsed.get('code', 'ERR')}: {parsed['error']}"
+    except (ValueError, TypeError):
+        pass
+    if 200 <= status < 300 and api_error is None:
         bridge.last_map_upload_ts[pubkey] = int(time.time())
-        return True, body
-    return False, f"HTTP {status}: {body[:200]}"
+        return True, body_short
+    if api_error:
+        return False, f"HTTP {status}: {api_error}"
+    return False, f"HTTP {status}: {body_short}"
