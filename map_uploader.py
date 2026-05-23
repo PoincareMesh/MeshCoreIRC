@@ -18,6 +18,13 @@ where the inner JSON is:
         "params": {"freq": MHz, "cr": int, "sf": int, "bw": kHz},
         "links":  ["meshcore://<raw_advert_hex>"]
     }
+
+Signing is delegated to the companion device via mc.commands.sign(). The
+companion stores its Ed25519 key in RFC 8032 *expanded* form (clamped scalar
+|| prefix); naïvely feeding that to python-cryptography's
+Ed25519PrivateKey.from_private_bytes — which expects a seed — yields a
+totally different keypair and the API rejects the signature. Signing on the
+device sidesteps that whole problem.
 """
 import asyncio
 import hashlib
@@ -27,37 +34,11 @@ import time
 import urllib.request
 from typing import Optional
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_URL = 'https://map.meshcore.io/api/v1/uploader/node'
 # Match the reference uploader: skip republishing the same node within an hour.
 MIN_REUPLOAD_INTERVAL = 3600
-
-
-async def _get_private_key_seed(bridge) -> Optional[bytes]:
-    """Fetch and cache the 32-byte Ed25519 seed from the companion device.
-
-    The MeshCore companion returns a 64-byte secret (32 seed + 32 pubkey), but
-    python-cryptography only needs the 32-byte seed half.
-    """
-    if bridge._mc_private_seed is not None:
-        return bridge._mc_private_seed
-    mc = bridge.mc
-    if not mc:
-        return None
-    ev = await mc.commands.export_private_key()
-    if ev is None or ev.is_error():
-        reason = ev.payload.get('reason', '?') if ev else 'no response'
-        logger.warning("export_private_key failed: %s", reason)
-        return None
-    sk = ev.payload.get('private_key')
-    if not sk or len(sk) < 32:
-        logger.warning("export_private_key returned unexpected payload: %r", ev.payload)
-        return None
-    bridge._mc_private_seed = bytes(sk[:32])
-    return bridge._mc_private_seed
 
 
 def _radio_params(bridge) -> dict:
@@ -92,9 +73,9 @@ async def upload_node(bridge, pubkey: str, raw_advert_hex: str,
     """
     if url is None:
         url = bridge.config.get('meshcore_map', {}).get('url', DEFAULT_URL)
-    seed = await _get_private_key_seed(bridge)
-    if seed is None:
-        return False, "could not fetch our private key from the companion device"
+    mc = bridge.mc
+    if mc is None:
+        return False, "MeshCore not connected"
 
     own_pubkey = (bridge.self_info or {}).get('public_key', '')
     if not own_pubkey:
@@ -108,13 +89,19 @@ async def upload_node(bridge, pubkey: str, raw_advert_hex: str,
     digest = hashlib.sha256(data_json.encode('utf-8')).digest()
 
     try:
-        signature = Ed25519PrivateKey.from_private_bytes(seed).sign(digest)
+        sign_ev = await mc.commands.sign(digest)
     except Exception as e:
-        return False, f"signing failed: {e}"
+        return False, f"sign command exception: {e}"
+    if sign_ev is None or sign_ev.is_error():
+        reason = sign_ev.payload.get('reason', '?') if sign_ev else 'no response'
+        return False, f"device sign failed: {reason}"
+    sig_bytes = sign_ev.payload.get('signature') if isinstance(sign_ev.payload, dict) else None
+    if not sig_bytes or len(sig_bytes) != 64:
+        return False, f"device returned unexpected signature: {sign_ev.payload!r}"
 
     request_body = json.dumps({
         'data': data_json,
-        'signature': signature.hex(),
+        'signature': bytes(sig_bytes).hex(),
         'publicKey': own_pubkey,
     }).encode('utf-8')
 
