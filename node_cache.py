@@ -86,6 +86,27 @@ class NodeCache:
         self._data[pubkey] = entry
         self._dirty = True
 
+    def update_raw_advert(self, pubkey: str, raw_hex: str, advert_ts: int = 0):
+        """Store the raw advert packet bytes (hex) for a full-pubkey entry.
+
+        The raw advert carries the contact's signed name/type/lat/lon and is what
+        the meshcore.io uploader API needs to publish a node on the public map.
+        """
+        if not pubkey or not raw_hex:
+            return
+        existing = self._data.get(pubkey, {})
+        if existing.get('raw_advert') == raw_hex and existing.get('raw_advert_ts', 0) >= advert_ts:
+            return
+        if advert_ts and existing.get('raw_advert_ts', 0) > advert_ts:
+            return
+        self._data[pubkey] = {
+            **existing,
+            'raw_advert': raw_hex,
+            'raw_advert_ts': advert_ts or existing.get('raw_advert_ts', 0),
+            'last_seen': time.time(),
+        }
+        self._dirty = True
+
     def update_path(self, pubkey: str, path_len: int, path_nodes: list, advert_ts: int,
                     hash_mode: int = -1):
         """Update advert hop-path data for a full-pubkey entry."""

@@ -71,6 +71,13 @@ class Bridge:
         self._passwords: dict = {}
         self._passwords_file: str = ''
         self._passwords_dirty: bool = False
+        # Auto-share-to-map: contacts whose adverts should be auto-uploaded to
+        # map.meshcore.io whenever we hear them.
+        self._autoshare: set = set()           # set of 64-char hex pubkeys
+        self._autoshare_file: str = ''
+        self._autoshare_dirty: bool = False
+        self.last_map_upload_ts: dict = {}     # pubkey -> last-upload unix-ts (in-memory only)
+        self._mc_private_seed = None           # cached Ed25519 seed bytes
 
     # ── Block list ────────────────────────────────────────────────────────────
 
@@ -169,6 +176,58 @@ class Bridge:
 
     def password_list(self) -> list:
         return list(self._passwords.keys())
+
+    # ── Auto-share to map ─────────────────────────────────────────────────────
+
+    def load_autoshare(self, file: str):
+        self._autoshare_file = file
+        try:
+            data = json.loads(Path(file).read_text())
+            if isinstance(data, list):
+                self._autoshare = {p.lower() for p in data if isinstance(p, str)}
+            if self._autoshare:
+                logger.info("Loaded %d auto-share-to-map entries from %s",
+                            len(self._autoshare), file)
+        except FileNotFoundError:
+            self._autoshare = set()
+        except Exception as e:
+            logger.warning("Could not load auto-share list from %s: %s", file, e)
+            self._autoshare = set()
+
+    def save_autoshare(self):
+        if not self._autoshare_file or not self._autoshare_dirty:
+            return
+        try:
+            Path(self._autoshare_file).write_text(
+                json.dumps(sorted(self._autoshare), indent=2))
+            self._autoshare_dirty = False
+        except Exception as e:
+            logger.error("Could not save auto-share list to %s: %s",
+                         self._autoshare_file, e)
+
+    def autoshare_add(self, pubkey: str) -> bool:
+        pk = pubkey.lower()
+        if pk in self._autoshare:
+            return False
+        self._autoshare.add(pk)
+        self._autoshare_dirty = True
+        self.save_autoshare()
+        return True
+
+    def autoshare_remove(self, pubkey: str) -> bool:
+        pk = pubkey.lower()
+        if pk not in self._autoshare:
+            return False
+        self._autoshare.discard(pk)
+        self._autoshare_dirty = True
+        self.save_autoshare()
+        return True
+
+    def autoshare_contains(self, pubkey: str) -> bool:
+        return pubkey.lower() in self._autoshare
+
+    def autoshare_list(self) -> list:
+        return sorted(self._autoshare)
 
     def broadcast(self, line: str, exclude=None):
         for client in list(self.irc_clients):

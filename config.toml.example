@@ -84,6 +84,16 @@ path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-positi
 # meshcore_map_max_hop_km     = 100.0 # discard resolved positions farther than this from their
                                       #   neighbour (prevents wildly wrong matches)
 
+# ── meshcore.io map uploader ──────────────────────────────────────────────────
+# Lets users publish a contact's location to https://map.meshcore.io/ via the
+# bot's `sharetomap <nick>` and `autosharetomap <nick>` commands. Auto-share
+# republishes a contact every time we hear a fresh advert from it (location
+# included), rate-limited to once per hour per node to mirror the official
+# uploader.
+[meshcore_map]
+# url            = "https://map.meshcore.io/api/v1/uploader/node"
+# autoshare_file = "autoshare.json"   # list of pubkeys with auto-share enabled
+
 # ── Persistent caches ─────────────────────────────────────────────────────────
 [cache]
 file          = "nodes.json"      # optional — unified node cache (default: nodes.json)

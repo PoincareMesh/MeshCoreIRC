@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 from meshcore import MeshCore, EventType
 
+import map_uploader
 from bridge import Bridge, sanitize_nick
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class MeshCoreHandler:
                 mc.subscribe(EventType.CHANNEL_MSG_RECV, self._on_channel_msg)
                 mc.subscribe(EventType.ADVERTISEMENT, self._on_advertisement)
                 mc.subscribe(EventType.NEW_CONTACT, self._on_new_contact)
+                mc.subscribe(EventType.RX_LOG_DATA, self._on_rx_log)
                 mc.subscribe(EventType.CONNECTED, self._on_connected)
                 mc.subscribe(EventType.DISCONNECTED, self._on_disconnected)
 
@@ -209,6 +212,25 @@ class MeshCoreHandler:
                 return name, msg
         return 'mesh', text
 
+    def _on_rx_log(self, event):
+        """Capture the raw advert packet payload, keyed by the sender's public key.
+
+        The raw bytes are what map.meshcore.io's uploader API needs to publish a
+        node — they include the contact's signed lat/lon, name, type and timestamp.
+        We can't reconstruct this from parsed fields, so we stash it here whenever
+        an ADVERT packet arrives (payload_type == 4) and persist it in node_cache.
+        """
+        payload = event.payload or {}
+        if payload.get('payload_type') != 4:
+            return
+        adv_key = payload.get('adv_key', '')
+        raw_hex = payload.get('payload', '')
+        if not adv_key or not raw_hex:
+            return
+        if self.bridge.node_cache:
+            self.bridge.node_cache.update_raw_advert(
+                adv_key, raw_hex, payload.get('adv_timestamp', 0))
+
     def _on_advertisement(self, event):
         pubkey = event.payload.get('public_key', '')
         if not pubkey:
@@ -233,8 +255,41 @@ class MeshCoreHandler:
 
             logger.info("Advertisement from %s [%s]", contact.get('adv_name'), pubkey[:12])
             await self._fetch_path_and_announce(pubkey, contact)
+            await self._maybe_autoshare(pubkey, contact)
         except Exception as e:
             logger.debug("Could not handle advertisement from %s: %s", pubkey[:12], e)
+
+    async def _maybe_autoshare(self, pubkey: str, contact: dict):
+        """If pubkey is in the auto-share-to-map list, upload its latest raw advert.
+
+        Skipped when the advert has no location or we've uploaded the same node
+        within MIN_REUPLOAD_INTERVAL seconds (matches the reference uploader).
+        """
+        if not self.bridge.autoshare_contains(pubkey):
+            return
+        if not (contact.get('adv_lat') or contact.get('adv_lon')):
+            return
+        last = self.bridge.last_map_upload_ts.get(pubkey, 0)
+        if time.time() - last < map_uploader.MIN_REUPLOAD_INTERVAL:
+            logger.debug("Skipping auto-share for %s — uploaded %ds ago",
+                         pubkey[:12], int(time.time() - last))
+            return
+        cache = self.bridge.node_cache
+        entry = cache.get_by_pubkey(pubkey) if cache else None
+        raw = entry.get('raw_advert', '') if entry else ''
+        if not raw:
+            logger.debug("Auto-share: no raw advert yet for %s", pubkey[:12])
+            return
+        name = contact.get('adv_name', pubkey[:12])
+        ok, msg = await map_uploader.upload_node(self.bridge, pubkey, raw)
+        if ok:
+            logger.info("Auto-shared %s [%s] to map.meshcore.io: %s",
+                        name, pubkey[:12], msg.strip()[:160])
+            self.bridge.broadcast_system(
+                f"Auto-shared {name} [{pubkey[:12]}] to map.meshcore.io")
+        else:
+            logger.warning("Auto-share upload failed for %s [%s]: %s",
+                           name, pubkey[:12], msg)
 
     async def _fetch_path_and_announce(self, pubkey: str, contact: dict):
         mc = self.bridge.mc

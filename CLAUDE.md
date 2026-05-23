@@ -111,6 +111,21 @@ Rendering order (order matters for z-index):
 
 `_build_chain()` constructs the chain as `[target, via..., self]` — target is always index 0, gateway (self) is always last.
 
+### Map uploader (`map_uploader.py`)
+
+Publishes a contact's signed advert to `https://map.meshcore.io/api/v1/uploader/node`.
+The advert (with lat/lon) must have been heard locally — we can't reconstruct the
+signed packet from parsed fields, so `_on_rx_log` in `meshcore_handler.py` captures
+the raw bytes via `RX_LOG_DATA` (payload_type 4) and stores them on the node_cache
+entry as `raw_advert`. The outer request is Ed25519-signed with our own companion's
+private key (lazily exported via `mc.commands.export_private_key()` and cached on
+`bridge._mc_private_seed`).
+
+Bot commands: `sharetomap <nick|pubkey>` (one-shot), `autosharetomap <nick|pubkey>`
+(toggle), `autosharetomap list`. Auto-share fires from `_maybe_autoshare()` in
+`meshcore_handler.py` whenever an advertised contact is in `bridge._autoshare`,
+gated by `MIN_REUPLOAD_INTERVAL = 3600` s. The set persists in `autoshare.json`.
+
 ### MeshCoreMapCache (`meshcore_map.py`)
 
 Fetches and caches the meshcore.io node registry. Provides three lookup methods used by `web_server.py`:

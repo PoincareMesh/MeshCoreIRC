@@ -66,6 +66,7 @@ def _flush_all(bridge):
         bridge.node_cache.flush_if_dirty()
     bridge.save_blocklist()
     bridge.save_passwords()
+    bridge.save_autoshare()
 
 
 def load_config(path: Path) -> dict:
@@ -91,6 +92,7 @@ async def main():
     bridge = Bridge(config)
     bridge.load_blocklist(config.get('irc', {}).get('blocklist_file', 'blocklist.json'))
     bridge.load_passwords(config.get('irc', {}).get('passwords_file', 'repeater_passwords.json'))
+    bridge.load_autoshare(config.get('meshcore_map', {}).get('autoshare_file', 'autoshare.json'))
     cache_cfg = config.get('cache', {})
     bridge.node_cache = NodeCache(
         cache_cfg.get('file', 'nodes.json'),

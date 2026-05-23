@@ -10,6 +10,7 @@ from datetime import timezone
 
 import urllib.parse
 
+import map_uploader
 import neighbours_store
 from bridge import Bridge, SERVER_NAME, BOT_NICK, sanitize_nick
 
@@ -366,6 +367,8 @@ class IRCClient:
         self.numeric('372', ':-   setpath <nick|pubkey> <hex>[:<mode>]   set fixed path')
         self.numeric('372', ':-')
         self.numeric('372', ':-   block / unblock / blocklist   ignore channel messages from a user')
+        self.numeric('372', ':-   sharetomap <nick|pubkey>     upload contact to map.meshcore.io')
+        self.numeric('372', ':-   autosharetomap <nick|pubkey> toggle auto-upload on each advert')
         self.numeric('372', ':- /whois <nick>  shows full contact details (pubkey, position, ...)')
         self.numeric('376', ':End of /MOTD command')
 
@@ -576,6 +579,9 @@ class IRCClient:
                 "  block <nick|pubkey>          ignore channel messages from a user",
                 "  unblock <nick>               remove from block list",
                 "  blocklist                    show block list",
+                "  sharetomap <nick|pubkey>     upload this contact to map.meshcore.io once",
+                "  autosharetomap <nick|pubkey> toggle auto-upload on every fresh advert",
+                "  autosharetomap [list]        list auto-share-enabled contacts",
                 "── Telemetry ─────────────────────────────────────────",
                 "  telemetry <nick>             request telemetry from a contact",
                 "  telemetryallow <nick> <data|sensors|location|all>",
@@ -892,6 +898,17 @@ class IRCClient:
 
         elif cmd == 'blocklist':
             asyncio.create_task(self._bot_blocklist())
+
+        elif cmd == 'sharetomap':
+            arg = ' '.join(parts[1:]).strip()
+            if not arg:
+                self._bot_msg("Usage: sharetomap <nick|pubkey>")
+                return
+            asyncio.create_task(self._bot_sharetomap(arg))
+
+        elif cmd == 'autosharetomap':
+            arg = ' '.join(parts[1:]).strip()
+            asyncio.create_task(self._bot_autosharetomap(arg))
 
         elif cmd == 'savepassword':
             if len(parts) < 3:
@@ -1986,6 +2003,84 @@ class IRCClient:
             self._bot_msg(f"Unblocked: {nick}")
         else:
             self._bot_msg(f"Not in block list: {nick}  (use: blocklist)")
+
+    def _resolve_pubkey(self, arg: str) -> tuple[str, str]:
+        """Resolve nick/pubkey/prefix → (full-pubkey-hex, display-name).
+
+        Looks at saved contacts, the bridge's known-contacts dict, and the node
+        cache. Returns ('', '') if no full 64-char pubkey can be found.
+        """
+        arg = arg.strip().strip('[]')
+        arg_lower = arg.lower()
+        if len(arg_lower) == 64 and all(c in '0123456789abcdef' for c in arg_lower):
+            c = self.bridge.contacts.get(arg_lower) or {}
+            return arg_lower, c.get('adv_name', arg_lower[:12])
+        contact = self.bridge.contact_for_nick(arg)
+        if contact and contact.get('public_key'):
+            return contact['public_key'].lower(), contact.get('adv_name', arg)
+        for pubkey, c in self.bridge.contacts.items():
+            if pubkey.lower().startswith(arg_lower):
+                return pubkey.lower(), c.get('adv_name', arg)
+        if self.bridge.node_cache:
+            for pubkey, entry in self.bridge.node_cache.all_items():
+                if pubkey.lower().startswith(arg_lower):
+                    return pubkey.lower(), entry.get('adv_name', arg)
+        return '', ''
+
+    async def _bot_sharetomap(self, arg: str):
+        pubkey, name = self._resolve_pubkey(arg)
+        if not pubkey:
+            self._bot_msg(f"No node with a full pubkey found for: {arg}")
+            return
+        if not self.bridge.mc:
+            self._bot_msg("MeshCore not connected")
+            return
+        cache = self.bridge.node_cache
+        entry = cache.get_by_pubkey(pubkey) if cache else None
+        raw = entry.get('raw_advert', '') if entry else ''
+        if not raw:
+            self._bot_msg(
+                f"No raw advert captured for {name} [{pubkey[:12]}] yet — "
+                "wait for them to advertise (or ask them to send one).")
+            return
+        self._bot_msg(f"Uploading {name} [{pubkey[:12]}] to map.meshcore.io …")
+        ok, msg = await map_uploader.upload_node(self.bridge, pubkey, raw)
+        if ok:
+            self._bot_msg(f"Shared {name} [{pubkey[:12]}]: {msg.strip()[:160]}")
+        else:
+            self._bot_msg(f"Share failed for {name} [{pubkey[:12]}]: {msg}")
+
+    async def _bot_autosharetomap(self, arg: str):
+        parts = arg.split(None, 1)
+        sub = parts[0].lower() if parts else ''
+
+        if sub in ('', 'list'):
+            entries = self.bridge.autoshare_list()
+            if not entries:
+                self._bot_msg("Auto-share-to-map: no contacts enabled")
+                self._bot_msg("Usage: autosharetomap <nick|pubkey>   (toggles on/off)")
+                return
+            self._bot_msg(f"Auto-share-to-map ({len(entries)}):")
+            for pk in entries:
+                c = self.bridge.contacts.get(pk)
+                name = c.get('adv_name', '?') if c else (
+                    self.bridge.node_cache.get_by_pubkey(pk) or {}).get('adv_name', '?')
+                self._bot_msg(f"  {sanitize_nick(name):<22} [{pk[:12]}]")
+            return
+
+        pubkey, name = self._resolve_pubkey(arg)
+        if not pubkey:
+            self._bot_msg(f"No node with a full pubkey found for: {arg}")
+            return
+
+        if self.bridge.autoshare_contains(pubkey):
+            self.bridge.autoshare_remove(pubkey)
+            self._bot_msg(f"Auto-share OFF: {name} [{pubkey[:12]}]")
+        else:
+            self.bridge.autoshare_add(pubkey)
+            self._bot_msg(
+                f"Auto-share ON: {name} [{pubkey[:12]}] — will be uploaded to "
+                "map.meshcore.io on every fresh advert")
 
     async def _bot_blocklist(self):
         entries = self.bridge.blocklist_entries()
