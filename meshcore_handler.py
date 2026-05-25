@@ -29,15 +29,22 @@ class MeshCoreHandler:
         self.bridge = bridge
 
     async def run(self):
-        tty = self.bridge.config['meshcore']['tty']
-        baudrate = self.bridge.config['meshcore'].get('baudrate', 115200)
+        mc_cfg = self.bridge.config['meshcore']
+        ble_address = mc_cfg.get('ble_address', '')
+        ble_pin = mc_cfg.get('ble_pin', '') or None
+        tty = mc_cfg.get('tty', '')
+        baudrate = mc_cfg.get('baudrate', 115200)
 
         asyncio.create_task(self._expire_members_loop())
 
         while True:
             try:
-                logger.info("Connecting to MeshCore on %s at %d baud", tty, baudrate)
-                mc = await MeshCore.create_serial(tty, baudrate=baudrate, auto_reconnect=False)
+                if ble_address:
+                    logger.info("Connecting to MeshCore over BLE at %s", ble_address)
+                    mc = await MeshCore.create_ble(ble_address, pin=ble_pin, auto_reconnect=False)
+                else:
+                    logger.info("Connecting to MeshCore on %s at %d baud", tty, baudrate)
+                    mc = await MeshCore.create_serial(tty, baudrate=baudrate, auto_reconnect=False)
                 self.bridge.mc = mc
 
                 mc.subscribe(EventType.CONTACT_MSG_RECV, self._on_contact_msg)

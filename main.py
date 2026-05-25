@@ -83,11 +83,15 @@ async def main():
     config = load_config(config_path)
     setup_logging(config)
 
-    required = [('meshcore', 'tty'), ('irc', 'password'), ('irc', 'port')]
+    required = [('irc', 'password'), ('irc', 'port')]
     for section, key in required:
         if section not in config or key not in config[section]:
             logger.error("Missing config key: [%s] %s", section, key)
             sys.exit(1)
+    mc_cfg = config.get('meshcore', {})
+    if not mc_cfg.get('tty') and not mc_cfg.get('ble_address'):
+        logger.error("Missing config key: [meshcore] tty or ble_address")
+        sys.exit(1)
 
     bridge = Bridge(config)
     bridge.load_blocklist(config.get('irc', {}).get('blocklist_file', 'blocklist.json'))
@@ -108,9 +112,11 @@ async def main():
         url=web_map_cfg.get('meshcore_map_url', 'https://map.meshcore.io/api/v1/nodes'),
     )
 
+    transport = (f"ble={mc_cfg['ble_address']}" if mc_cfg.get('ble_address')
+                 else f"tty={mc_cfg.get('tty')}")
     logger.info(
-        "Starting MeshCore IRC gateway  tty=%s  irc=%s:%d",
-        config['meshcore']['tty'],
+        "Starting MeshCore IRC gateway  %s  irc=%s:%d",
+        transport,
         config['irc']['host'],
         config['irc']['port'],
     )

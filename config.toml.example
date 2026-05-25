@@ -1,10 +1,17 @@
 # MeshCore IRC Gateway — example configuration
 # Copy this file to config.toml and edit the values marked REQUIRED.
 
-# ── MeshCore serial connection ────────────────────────────────────────────────
+# ── MeshCore connection ───────────────────────────────────────────────────────
+# Pick ONE transport: serial (tty) OR Bluetooth (ble_address).
+# If both are set, ble_address wins.
 [meshcore]
-tty      = "/dev/ttyUSB0"   # REQUIRED — serial port of the MeshCore device
+tty      = "/dev/ttyUSB0"   # REQUIRED (serial) — serial port of the MeshCore device
 baudrate = 115200            # optional — serial baud rate (default: 115200)
+
+# Bluetooth LE — uncomment to connect over BLE instead of serial.
+# Requires the `bleak` package (installed automatically with `meshcore`).
+# ble_address = "AA:BB:CC:DD:EE:FF"   # BD address of the companion device
+# ble_pin     = "123456"               # optional — pairing PIN if the device requires one
 
 # ── IRC server ────────────────────────────────────────────────────────────────
 [irc]
