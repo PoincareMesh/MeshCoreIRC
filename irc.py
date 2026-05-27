@@ -339,7 +339,7 @@ class IRCClient:
         self.numeric('372', f':- Commands (via /msg {BOT_NICK} <cmd>):')
         self.numeric('372', ':-   help                       show this list')
         self.numeric('372', ':-   contacts <all|repeater|companion|sensor|room> [filter]')
-        self.numeric('372', ':-   discovered <all|repeater|companion|sensor|room> [filter]')
+        self.numeric('372', ':-   discovered <all|repeater|companion|sensor|room> [filter] [hours|Nh|Nd|all] (default 24h)')
         self.numeric('372', ':-   nodeinfo                   show our own node details')
         self.numeric('372', ':-   login <name> [pwd]         login to a repeater (uses saved pwd if omitted)')
         self.numeric('372', ':-   logout <name>              logout from a repeater')
@@ -570,7 +570,7 @@ class IRCClient:
                 "  deletechannel <name|#ch|idx> delete a channel from companion",
                 "── Contacts ──────────────────────────────────────────",
                 "  contacts <all|repeater|companion|sensor|room> [filter]",
-                "  discovered <all|repeater|companion|sensor|room> [filter]",
+                "  discovered <all|repeater|companion|sensor|room> [filter] [hours|Nh|Nd|all]  (default 24h)",
                 "  addcontact <nick|pubkey> [name]  save a contact (name optional for pubkey add)",
                 "  removecontact <nick|pubkey>  remove a saved contact from companion",
                 "  renamecontact <nick|pubkey> <new name>  rename a saved contact",
@@ -645,13 +645,32 @@ class IRCClient:
 
         elif cmd == 'discovered':
             if len(parts) < 2:
-                self._bot_msg("Usage: discovered <all|repeater|companion|sensor|room> [name/hash filter]")
+                self._bot_msg("Usage: discovered <all|repeater|companion|sensor|room> [filter] [hours|Nh|Nd|all]")
                 return
             filter_arg = parts[1].lower()
             if filter_arg not in _TYPE_FILTERS:
                 self._bot_msg(f"Unknown type: {filter_arg}  —  options: all  repeater  companion  sensor  room")
                 return
-            name_filter = parts[2].lower() if len(parts) > 2 else ''
+
+            name_filter = ''
+            max_age_hours: float | None = 24.0
+            for extra in parts[2:]:
+                v = extra.lower()
+                if v == 'all':
+                    max_age_hours = None
+                    continue
+                num = None
+                if v.endswith('h') and v[:-1].replace('.', '', 1).isdigit():
+                    num = float(v[:-1])
+                elif v.endswith('d') and v[:-1].replace('.', '', 1).isdigit():
+                    num = float(v[:-1]) * 24
+                elif v.replace('.', '', 1).isdigit():
+                    num = float(v)
+                if num is not None:
+                    max_age_hours = num
+                else:
+                    name_filter = v
+
             allowed_types = _TYPE_FILTERS[filter_arg]
 
             mc = self.bridge.mc
@@ -683,12 +702,23 @@ class IRCClient:
                           if name_filter in self.bridge.contact_nick(v).lower()
                           or name_filter in k.lower()}
 
+            now = time.time()
+            if max_age_hours is not None:
+                cutoff = now - max_age_hours * 3600
+                merged = {k: v for k, v in merged.items()
+                          if self.bridge.advert_last_ts_by_pubkey.get(k, 0) >= cutoff}
+
             if not merged:
-                self._bot_msg(f"No discovered {filter_arg} contacts" + (f" matching '{name_filter}'" if name_filter else ""))
+                scope = f"matching '{name_filter}'" if name_filter else ''
+                age = "" if max_age_hours is None else f" in last {_fmt_age(max_age_hours * 3600)}"
+                self._bot_msg(f"No discovered {filter_arg} contacts{(' ' + scope) if scope else ''}{age}")
                 return
 
-            self._bot_msg(f"Discovered ({filter_arg}{', ' + name_filter if name_filter else ''}, {len(merged)}):")
-            now = time.time()
+            age_label = "all time" if max_age_hours is None else f"last {_fmt_age(max_age_hours * 3600)}"
+            header_extras = [filter_arg, age_label]
+            if name_filter:
+                header_extras.insert(1, name_filter)
+            self._bot_msg(f"Discovered ({', '.join(header_extras)}, {len(merged)}):")
             for pubkey, c in sorted(merged.items(),
                                     key=lambda kv: kv[1].get('adv_name', '').lower()):
                 node_type = c.get('type', 0)
