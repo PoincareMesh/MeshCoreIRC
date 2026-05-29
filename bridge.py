@@ -53,6 +53,7 @@ class Bridge:
         self.repeater_sessions: dict = {} # nick_lower -> contact dict
         self.node_cache = None            # NodeCache, set by main.py
         self.meshcore_map = None          # MeshCoreMapCache, set by main.py
+        self.sync_state = None            # SyncState, set by main.py
         self.self_info: dict = {}
         self.advert_path_by_pubkey: dict = {}       # pubkey -> best (shortest) incoming path_len
         self.advert_path_nodes_by_pubkey: dict = {} # pubkey -> intermediate node names for best path

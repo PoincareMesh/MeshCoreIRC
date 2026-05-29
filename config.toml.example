@@ -7,6 +7,7 @@
 [meshcore]
 tty      = "/dev/ttyUSB0"   # REQUIRED (serial) — serial port of the MeshCore device
 baudrate = 115200            # optional — serial baud rate (default: 115200)
+# backlog_delay_ms = 0       # optional — delay in ms between backlog messages on reconnect (default: 0 = no delay)
 
 # Bluetooth LE — uncomment to connect over BLE instead of serial.
 # Requires the `bleak` package (installed automatically with `meshcore`).
@@ -103,9 +104,10 @@ path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-positi
 
 # ── Persistent caches ─────────────────────────────────────────────────────────
 [cache]
-file          = "nodes.json"      # optional — unified node cache (default: nodes.json)
-max_age_hours = 336               # optional — discard cache entries older than this
-                                  #   (default: 336 = 14 days)
+file              = "nodes.json"      # optional — unified node cache (default: nodes.json)
+max_age_hours     = 336               # optional — discard cache entries older than this
+                                      #   (default: 336 = 14 days)
+# sync_state_file = "sync_state.json" # optional — dedup high-water-mark store (default: sync_state.json)
 
 # How often the JSON cache files are flushed to disk (default: 1 h).
 # Increase this on Raspberry Pi / SD-card systems to reduce write wear.

@@ -16,6 +16,7 @@ except ImportError:
 
 from bridge import Bridge
 from node_cache import NodeCache
+from sync_state import SyncState
 from irc import IRCServer
 from meshcore_handler import MeshCoreHandler
 from meshcore_map import MeshCoreMapCache, run_refresh_loop
@@ -104,6 +105,7 @@ async def main():
     )
     bridge.load_hops_data(bridge.node_cache.hops_data())
     bridge.load_msg_paths_from_cache()
+    bridge.sync_state = SyncState(cache_cfg.get('sync_state_file', 'sync_state.json'))
 
     web_map_cfg = config.get('webserver', {})
     bridge.meshcore_map = MeshCoreMapCache(
