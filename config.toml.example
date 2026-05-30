@@ -107,7 +107,8 @@ path_color_unknown_bg  = "rgba(255,255,255,0.85)" # background of unknown-positi
 file              = "nodes.json"      # optional — unified node cache (default: nodes.json)
 max_age_hours     = 336               # optional — discard cache entries older than this
                                       #   (default: 336 = 14 days)
-# sync_state_file = "sync_state.json" # optional — dedup high-water-mark store (default: sync_state.json)
+# sync_state_file      = "sync_state.json"       # optional — dedup high-water-mark store (default: sync_state.json)
+# channel_scopes_file  = "channel_scopes.json"   # optional — per-channel flood scope persistence (default: channel_scopes.json)
 
 # How often the JSON cache files are flushed to disk (default: 1 h).
 # Increase this on Raspberry Pi / SD-card systems to reduce write wear.

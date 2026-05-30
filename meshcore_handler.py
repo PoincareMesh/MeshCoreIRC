@@ -84,6 +84,7 @@ class MeshCoreHandler:
 
         while True:
             self._draining = False
+            self.bridge.mc_draining = False
             self._drain_count = 0
             mc = None
             # Tear down the previous BLE client before creating a new one so BlueZ
@@ -187,6 +188,7 @@ class MeshCoreHandler:
                 mc.set_decrypt_channel_logs(True)
 
                 self._draining = True
+                self.bridge.mc_draining = True
                 self._drain_count = 0
                 logger.debug("Drain started — explicit get_msg loop until NO_MORE_MSGS")
                 deadline = asyncio.get_event_loop().time() + 120.0
@@ -207,7 +209,31 @@ class MeshCoreHandler:
                         break
                 logger.info("Drained %d buffered message(s) on connect", self._drain_count)
                 self._draining = False
+                self.bridge.mc_draining = False
                 await mc.start_auto_message_fetching()
+
+                # Read the device's persistent default flood scope after the drain
+                # window closes (Pitfall #4: must be outside _draining to avoid
+                # its OK/DEFAULT_FLOOD_SCOPE response satisfying the get_msg wait).
+                try:
+                    ev = await mc.commands.get_default_flood_scope()
+                    if ev and not ev.is_error():
+                        scope_name = ev.payload.get('scope_name', '')
+                        scope_key = ev.payload.get('scope_key', '')
+                        # Normalize: empty name or all-zero key → no scope set
+                        if scope_name == '' or scope_key == '0' * 32:
+                            self.bridge.default_scope = ''
+                        else:
+                            self.bridge.default_scope = scope_name
+                        logger.info("Default scope: %s", scope_name or "(none)")
+                    else:
+                        # WR-05: read failed — leave bridge.default_scope sticky
+                        # (intentionally not cleared); the cached value may now be
+                        # stale until the next successful read.
+                        logger.warning("Could not read default flood scope from device; cached scope may be stale")
+                except Exception as e:
+                    # WR-05: sticky cache on failure — do not clear bridge.default_scope.
+                    logger.warning("Default scope read failed (cached scope may be stale): %s", e)
 
                 si = mc.self_info
                 if si:

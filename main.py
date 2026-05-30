@@ -99,6 +99,7 @@ async def main():
     bridge.load_passwords(config.get('irc', {}).get('passwords_file', 'repeater_passwords.json'))
     bridge.load_autoshare(config.get('meshcore_map', {}).get('autoshare_file', 'autoshare.json'))
     cache_cfg = config.get('cache', {})
+    bridge.load_channel_scopes(cache_cfg.get('channel_scopes_file', 'channel_scopes.json'))
     bridge.node_cache = NodeCache(
         cache_cfg.get('file', 'nodes.json'),
         cache_cfg.get('max_age_hours', 336),

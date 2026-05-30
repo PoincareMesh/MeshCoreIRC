@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import os
 import re
 import math
 import time
@@ -11,6 +13,10 @@ logger = logging.getLogger(__name__)
 SERVER_NAME = "meshcoreirc"
 BOT_NICK = "_MeshCore"
 _DEFAULT_MEMBER_TTL = 3600
+
+# Per-channel flood-scope name allowlist (D-06 / Phase 4 D-10): lowercase
+# alphanumerics + hyphen, 1–20 chars. Cap is 20 per the v1.1 constraint.
+_SCOPE_RE = re.compile(r'[a-z0-9-]{1,20}')
 
 # Node type byte → display label  (0=none/client, 1=companion, 2=repeater, 3=room, 4=sensor)
 NODE_TYPE_LABEL = {0: 'sensor', 1: 'companion', 2: 'repeater', 3: 'room', 4: 'sensor'}
@@ -79,6 +85,19 @@ class Bridge:
         self._autoshare_dirty: bool = False
         self.last_map_upload_ts: dict = {}     # pubkey -> last-upload unix-ts (in-memory only)
         self._mc_private_seed = None           # cached Ed25519 seed bytes
+        # Region-scope safety infrastructure (v1.1):
+        # WR-02: default_scope is a display-only, best-effort cache. ONLY the device
+        # write in `set scope` is serialized via _scope_lock; this field itself is
+        # last-writer-wins and is also written (unlocked) by `get scope` and the
+        # on-connect read. It is informational and not relied on for correctness.
+        self.default_scope: str = ""           # cached device default flood scope; "" = none/unscoped
+        self._scope_lock = asyncio.Lock()      # serializes the scope-mutating device WRITE only (RSCOPE-01); not the cache field
+        self.mc_draining: bool = False         # drain-state mirror; True while MeshCoreHandler drains backlog (RSCOPE-02)
+        # Per-channel flood scope (v1.1, Phase 5): keyed by DEVICE channel NAME (D-01),
+        # not slot index — scope follows the channel across slot moves. Orphaned entries
+        # (name not in self.channels) are kept on load (D-02).
+        self.channel_scopes: dict = {}          # device_channel_name -> bare scope name (validated ^[a-z0-9-]{1,20}$)
+        self._channel_scopes_file: str = ''
 
     # ── Block list ────────────────────────────────────────────────────────────
 
@@ -230,6 +249,67 @@ class Bridge:
     def autoshare_list(self) -> list:
         return sorted(self._autoshare)
 
+    # ── Per-channel flood scope ───────────────────────────────────────────────
+
+    def load_channel_scopes(self, file: str):
+        self._channel_scopes_file = file
+        try:
+            data = json.loads(Path(file).read_text())
+            if isinstance(data, dict):
+                # D-02: keep ALL entries, including orphans (name not yet in self.channels).
+                # Do NOT prune against self.channels — channels reload asynchronously after
+                # startup; early pruning would race the reload and drop valid scopes.
+                # IN-04: JSON object keys are always strings — the old str(k) wrap was dead
+                # code that could mask malformed input; require a real str key instead.
+                # WR-03: drop entries whose value fails the scope allowlist so a hand-edited
+                # or corrupted file can never poison the store with an arbitrary scope.
+                self.channel_scopes = {
+                    k: v for k, v in data.items()
+                    if isinstance(k, str) and isinstance(v, str) and _SCOPE_RE.fullmatch(v)
+                }
+            if self.channel_scopes:
+                logger.info("Loaded %d channel-scope entries from %s",
+                            len(self.channel_scopes), file)
+        except FileNotFoundError:
+            self.channel_scopes = {}
+        except Exception as e:
+            logger.warning("Could not load channel scopes from %s: %s", file, e)
+            self.channel_scopes = {}
+
+    def save_channel_scopes(self):
+        if not self._channel_scopes_file:
+            return
+        try:
+            tmp = self._channel_scopes_file + '.tmp'
+            Path(tmp).write_text(json.dumps(self.channel_scopes, indent=2, ensure_ascii=False))
+            os.replace(tmp, self._channel_scopes_file)   # atomic (D-03)
+        except Exception as e:
+            logger.error("Could not save channel scopes to %s: %s",
+                         self._channel_scopes_file, e)
+
+    def set_channel_scope(self, channel_name: str, scope: str):
+        # WR-03 / IN-02: enforce the scope-name allowlist and a non-blank channel name
+        # here so the invariant holds regardless of caller (defense-in-depth; the
+        # _bot_setchannelscope caller already validates on the happy path).
+        if not channel_name:
+            raise ValueError("channel_name must not be empty")
+        if not _SCOPE_RE.fullmatch(scope):
+            raise ValueError(f"invalid scope name: {scope!r}")
+        self.channel_scopes[channel_name] = scope
+        self.save_channel_scopes()   # D-03: immediate flush, no dirty-flag gate
+
+    def clear_channel_scope(self, channel_name: str) -> bool:
+        if channel_name not in self.channel_scopes:
+            return False
+        del self.channel_scopes[channel_name]
+        self.save_channel_scopes()   # D-03: immediate flush, no dirty-flag gate
+        return True
+
+    def channel_scope_for_idx(self, idx: int) -> str:
+        """Return the bare scope name for the channel at slot idx, or '' if unscoped."""
+        name = self.channels.get(idx, '')
+        return self.channel_scopes.get(name, '') if name else ''
+
     def broadcast(self, line: str, exclude=None):
         for client in list(self.irc_clients):
             if client.registered and client is not exclude:
@@ -272,6 +352,21 @@ class Bridge:
             except ValueError:
                 pass
         return None
+
+    def mc_idxs_for_channel(self, irc_channel: str) -> list[int]:
+        """Return all slot indices whose IRC channel name matches irc_channel (case-insensitive).
+
+        Returns a list with 0, 1, or many elements:
+          0 — unknown channel (no match)
+          1 — unambiguous match; caller may proceed
+          2+ — ambiguous: two or more channels sanitize to the same IRC name; caller must refuse
+
+        Does NOT include the #mesh-<n> numeric fallback — that is explicit slot addressing,
+        not a named-channel match, and is not subject to name ambiguity.
+        """
+        ch = irc_channel.lower()
+        return [idx for idx in self.channels
+                if self.irc_channel_for_idx(idx).lower() == ch]
 
     def assign_contact_nick(self, mc_name: str) -> str:
         """Return a unique IRC nick for mc_name, disambiguating collisions with a number suffix."""

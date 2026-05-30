@@ -13,10 +13,14 @@ import urllib.parse
 import map_uploader
 import neighbours_store
 from bridge import Bridge, SERVER_NAME, BOT_NICK, sanitize_nick
+from meshcore import EventType
 
 logger = logging.getLogger(__name__)
 
 CREATED = datetime.datetime.now(timezone.utc).strftime("%a %b %d %Y at %H:%M:%S UTC")
+
+# Timeout (seconds) for scope-related device commands (get/set default flood scope)
+_SCOPE_CMD_TIMEOUT = 5.0
 
 # MeshCore node type byte → label  (0=none/client, 1=companion, 2=repeater, 3=room, 4=sensor)
 _NODE_TYPE_LABEL = {0: 'sensor', 1: 'companion', 2: 'repeater', 3: 'room', 4: 'sensor'}
@@ -450,7 +454,18 @@ class IRCClient:
                 return
             self.bridge.broadcast(f":{self.prefix} PRIVMSG {target} :{text}", exclude=self)
             if self.bridge.mc:
-                asyncio.create_task(self._send_chan_msg(idx, mc_text))
+                # D-07: compute scope at dispatch time (before create_task) so it is
+                # captured at task-creation time, not read lazily inside the coroutine.
+                scope = self.bridge.channel_scope_for_idx(idx)
+                if scope:
+                    # WR-02: capture the restore target at dispatch time (mirrors the D-07
+                    # capture-at-create_task discipline for `scope`). A `set scope` command
+                    # that mutates bridge.default_scope between this dispatch and the
+                    # finally-restore must not redirect this message's restore target.
+                    restore_to = self.bridge.default_scope
+                    asyncio.create_task(self._send_chan_msg_scoped(idx, mc_text, scope, restore_to))
+                else:
+                    asyncio.create_task(self._send_chan_msg(idx, mc_text))
             else:
                 self._bot_notice("MeshCore not connected")
             return
@@ -495,6 +510,57 @@ class IRCClient:
         except Exception as e:
             logger.error("send_chan_msg failed: %s", e)
             self._bot_notice(f"Channel send failed: {e}")
+
+    async def _send_chan_msg_scoped(self, idx: int, mc_text: str, scope: str, restore_to):
+        """Send a channel message with a transient per-channel flood scope.
+
+        D-09: during drain window, skip scope and send unscoped (no device scope write).
+        D-08: queue on the lock (await, never reject) so concurrent scoped sends both complete.
+        D-10: restore-to-default is finally-guaranteed (transient scope is device-global).
+        D-11: all device awaits wrapped in asyncio.wait_for(_SCOPE_CMD_TIMEOUT).
+        WR-02: restore_to is the default scope captured at dispatch time, not read lazily.
+        """
+        # D-09: during reconnect drain, skip transient scope (Pitfall 4: a scope OK can
+        # misparse the drain loop's get_msg wait). Send unscoped and notify.
+        if self.bridge.mc_draining:
+            self._bot_notice("sent unscoped — gateway reconnecting")
+            await self._send_chan_msg(idx, mc_text)
+            return
+        mc = self.bridge.mc
+        # D-08: await the lock (queue, never reject). Lock spans entire set->send->restore
+        # so no other scope write can interleave (Pitfall 3).
+        async with self.bridge._scope_lock:
+            # WR-01: TOCTOU re-check. The pre-lock mc_draining check above is not atomic
+            # with lock acquisition — a reconnect/drain can begin at the await on lock
+            # acquisition. If drain started (or the connection was replaced) while we
+            # queued, fall back to the unscoped path and write NO scope (Pitfall 4).
+            if self.bridge.mc_draining or self.bridge.mc is not mc:
+                self._bot_notice("sent unscoped — gateway reconnecting")
+                await self._send_chan_msg(idx, mc_text)
+                return
+            try:
+                await asyncio.wait_for(
+                    mc.commands.set_flood_scope(scope), timeout=_SCOPE_CMD_TIMEOUT
+                )
+                await asyncio.wait_for(
+                    mc.commands.send_chan_msg(idx, mc_text), timeout=_SCOPE_CMD_TIMEOUT
+                )
+            except Exception as e:
+                logger.error("scoped send failed (idx=%s scope=%s): %s", idx, scope, e)
+                self._bot_notice(f"Channel send failed: {e}")
+            finally:
+                # D-10: ALWAYS restore to authoritative default (Pitfall 1: no get_flood_scope;
+                # bridge.default_scope is the only source of truth).
+                # WR-02: restore to the value captured at dispatch time, not a lazily-read
+                # bridge.default_scope that may have shifted since this send was queued.
+                # restore_to or None -> zero key (set_flood_scope treats ""/None as clear).
+                try:
+                    await asyncio.wait_for(
+                        mc.commands.set_flood_scope(restore_to or None),
+                        timeout=_SCOPE_CMD_TIMEOUT
+                    )
+                except Exception as e:
+                    logger.error("scope RESTORE failed — device may be tainted: %s", e)
 
     def _contact_notice(self, contact: dict, text: str):
         """Broadcast a message that appears in the contact's DM tab on all clients."""
@@ -561,10 +627,12 @@ class IRCClient:
                 "  get/set telemetry [<base|loc|env> <0-3>]",
                 "  get/set af [<1-9>]           Airtime Factor",
                 "  get/set pathmode [<1-4>]     path hash size (1=small, 4=large)",
+                "  get/set scope [<name>|off]   default flood scope (device-global)",
                 "  get tuning|bat|stats|deviceinfo|customs",
                 "  refreshcontacts              refresh contact list from companion",
                 "  zeroadvert / floodadvert     send self-advertisement",
                 "  listchannels                 list all configured channel slots",
+                "  setchannelscope #ch <name>|off  set per-channel flood scope (gateway-side)",
                 "  addchannel <name>            join MeshCore channel (auto slot)",
                 "  addchannel <idx> <name>      join channel at specific slot",
                 "  deletechannel <name|#ch|idx> delete a channel from companion",
@@ -848,6 +916,9 @@ class IRCClient:
         elif cmd == 'listchannels':
             self._bot_listchannels()
 
+        elif cmd == 'setchannelscope':
+            self._bot_setchannelscope(' '.join(parts[1:]).strip())
+
         elif cmd == 'addcontact':
             if len(parts) < 2:
                 self._bot_msg("Usage: addcontact <nick|pubkey> [name]")
@@ -1110,9 +1181,38 @@ class IRCClient:
                 else:
                     self._bot_msg("Custom vars not available")
 
+            elif sub == 'scope':
+                # Drain guard (WR-03): reading the scope mid-drain risks the
+                # DEFAULT_FLOOD_SCOPE/OK response being consumed by the in-flight
+                # get_msg wait (Pitfall #4) — mirror the set scope guard wording.
+                if self.bridge.mc_draining:
+                    self._bot_notice("Gateway is reconnecting — try again")
+                    return
+                try:
+                    ev = await asyncio.wait_for(mc.commands.get_default_flood_scope(), timeout=_SCOPE_CMD_TIMEOUT)
+                except asyncio.TimeoutError:
+                    self._bot_notice("Device did not respond — try again")
+                    return
+                if ev and not ev.is_error():
+                    p = ev.payload
+                    scope_name = p.get('scope_name', '')
+                    scope_key = p.get('scope_key', '')
+                    self.bridge.default_scope = '' if (scope_name == '' or scope_key == '0' * 32) else scope_name
+                    if scope_name == '' or scope_key == '0' * 32:
+                        self._bot_msg("Default scope: none")
+                    else:
+                        key8 = scope_key[:8] if scope_key else '????????'
+                        self._bot_msg(f"Default scope: {scope_name} ({key8}…)")
+                else:
+                    # WR-05: read failed — intentionally leave bridge.default_scope
+                    # untouched (sticky cache). The last-known value is shown
+                    # elsewhere; we do not clear it on a transient read failure,
+                    # so the cache may be stale until the next successful read.
+                    self._bot_msg("Default scope: not available")
+
             else:
                 self._bot_msg(
-                    f"Unknown: get {sub}  —  options: (empty)  power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  bat  stats  pathmode  deviceinfo  customs"
+                    f"Unknown: get {sub}  —  options: (empty)  power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  bat  stats  pathmode  deviceinfo  customs  scope"
                 )
         except Exception as e:
             self._bot_msg(f"Get error: {e}")
@@ -1232,10 +1332,68 @@ class IRCClient:
                     if ev and not ev.is_error() else "Failed to set path hash mode"
                 )
 
+            elif setting == 'scope':
+                # Drain guard (RSCOPE-02, D-05): check before any await
+                if self.bridge.mc_draining:
+                    self._bot_notice("Gateway is reconnecting — try again")
+                    return
+                # Lock guard (RSCOPE-01, D-06): reject if already writing; never queue
+                if self.bridge._scope_lock.locked():
+                    self._bot_notice("Scope change in progress — try again")
+                    return
+                if not args:
+                    self._bot_msg("Usage: set scope <name>|off")
+                    return
+                val = args[0].lower()
+                # Determine clear vs set
+                is_clear = val in ('off', 'clear', 'none', '*')
+                if not is_clear:
+                    # Validation (D-10, DSCOPE-05): allowlist ^[a-z0-9-]{1,20}$
+                    if not re.fullmatch(r'[a-z0-9-]{1,20}', val):
+                        self._bot_msg("Invalid scope name — use lowercase a-z, 0-9, hyphen, max 20 chars")
+                        return
+                # Acquire lock for the full device interaction (D-06)
+                async with self.bridge._scope_lock:
+                    arg = '' if is_clear else val
+                    try:
+                        ev = await asyncio.wait_for(
+                            mc.commands.set_default_flood_scope(arg), timeout=_SCOPE_CMD_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        self._bot_notice("Device did not respond — try again")
+                        return
+                    # IN-01: the previous "clear fallback" re-sent bytes byte-for-byte
+                    # identical to what set_default_flood_scope("") already builds, so it
+                    # could never succeed where the library call failed (except on a
+                    # transient timeout, already handled above). Removed as ineffective.
+                    if ev is not None and ev.type == EventType.OK:
+                        # WR-01: mirror the library's behaviour — the device stores
+                        # non-empty scope names with a leading '#' (messaging.py:365-367).
+                        # Cache + report the '#'-prefixed device form so the value matches
+                        # what `get scope`/on-connect reads return. Clear stays "".
+                        device_name = '' if is_clear else ('#' + arg if not arg.startswith('#') else arg)
+                        # Update cache (best-effort; see WR-02 note in bridge.py)
+                        self.bridge.default_scope = device_name
+                        # Device-global confirmation NOTICE (D-03, DSCOPE-04)
+                        if is_clear:
+                            self._bot_notice(
+                                "Default scope cleared — device is now unscoped; "
+                                "this change is DEVICE-GLOBAL and affects all companion clients including the phone app"
+                            )
+                        else:
+                            self._bot_notice(
+                                f"Default scope set to '{device_name}' — "
+                                "this change is DEVICE-GLOBAL and affects all companion clients including the phone app"
+                            )
+                        # Warning-level log (D-04) with %-style positional args
+                        logger.warning("Default scope changed to %s by %s", device_name or "(none)", self.addr[0])
+                    else:
+                        self._bot_msg("Failed to set scope")
+
             else:
                 self._bot_msg(
                     f"Unknown setting: {setting}  —  "
-                    "options: power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  pathmode"
+                    "options: power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  pathmode  scope"
                 )
 
         except (ValueError, IndexError) as e:
@@ -1656,7 +1814,53 @@ class IRCClient:
         for idx in sorted(self.bridge.channels):
             name = self.bridge.channels[idx]
             irc_ch = self.bridge.irc_channel_for_idx(idx)
-            self._bot_msg(f"  [{idx}] {name} → {irc_ch}")
+            scope = self.bridge.channel_scopes.get(name, '')
+            scope_str = scope if scope else '—'
+            self._bot_msg(f"  [{idx}] {name} → {irc_ch}  scope: {scope_str}")
+
+    def _bot_setchannelscope(self, args_str: str):
+        parts = args_str.split()
+        if len(parts) < 2:
+            self._bot_msg("Usage: setchannelscope #channel <name>|off")
+            return
+        channel, val = parts[0], parts[1].lower()
+        # D-06: ambiguity-aware resolution (CSCOPE-06, Pitfall 5)
+        idxs = self.bridge.mc_idxs_for_channel(channel)
+        if not idxs:
+            # IN-01: scopes can only target NAMED channels (mc_idxs_for_channel excludes
+            # the #mesh-<n> numeric fallback). Make that explicit so an operator who can
+            # message #mesh-3 understands why its scope cannot be set by that form.
+            self._bot_notice(
+                f"Unknown channel: {channel} (scopes apply to named channels only, "
+                "not #mesh-<n> slots)"
+            )
+            return
+        if len(idxs) > 1:
+            slot_list = ', '.join(str(i) for i in idxs)
+            self._bot_notice(
+                f"Ambiguous channel: {channel} matches slots [{slot_list}]; cannot set scope"
+            )
+            return
+        idx = idxs[0]
+        chan_name = self.bridge.channels[idx]  # device name = the persistence key (D-01)
+        # D-04 clear aliases: off/clear/none/*
+        is_clear = val in ('off', 'clear', 'none', '*')
+        if is_clear:
+            if self.bridge.clear_channel_scope(chan_name):
+                self._bot_notice(f"Scope cleared for {channel}")
+            else:
+                self._bot_notice(f"{channel} had no scope")
+            return
+        # Validation (D-06 carry-forward of Phase 4 D-10): same allowlist as Phase 4
+        if not re.fullmatch(r'[a-z0-9-]{1,20}', val):
+            self._bot_msg("Invalid scope name — use lowercase a-z, 0-9, hyphen, max 20 chars")
+            return
+        # Store the BARE name (D-06; set_flood_scope auto-prepends '#' at send time)
+        self.bridge.set_channel_scope(chan_name, val)
+        self._bot_notice(
+            f"Scope '{val}' applied to outbound messages on {channel} "
+            "(gateway-side; not a device-stored per-channel setting)"
+        )
 
     async def _bot_addcontact(self, arg: str, given_name: str = ''):
         arg = arg.strip().strip('[]')
