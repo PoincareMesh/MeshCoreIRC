@@ -506,7 +506,11 @@ class Bridge:
         idx = self.mc_idx_for_channel(irc_channel)
         if idx is not None:
             name = self.channels.get(idx, '')
-            return f"MeshCore Channel {idx}" + (f": {name}" if name else "")
+            topic = f"MeshCore Channel {idx}" + (f": {name}" if name else "")
+            scope = self.channel_scopes.get(name, '') if name else ''
+            if scope:
+                topic += f"  [region scope: {scope}]"
+            return topic
         return ""
 
     # ── Channel member presence ───────────────────────────────────────────────

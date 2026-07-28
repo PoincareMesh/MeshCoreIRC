@@ -632,7 +632,7 @@ class IRCClient:
                 "  refreshcontacts              refresh contact list from companion",
                 "  zeroadvert / floodadvert     send self-advertisement",
                 "  listchannels                 list all configured channel slots",
-                "  setchannelscope #ch <name>|off  set per-channel flood scope (gateway-side)",
+                "  get/set channelscope #ch [<name>|off]  per-channel region scope (gateway-side)",
                 "  addchannel <name>            join MeshCore channel (auto slot)",
                 "  addchannel <idx> <name>      join channel at specific slot",
                 "  deletechannel <name|#ch|idx> delete a channel from companion",
@@ -824,7 +824,8 @@ class IRCClient:
 
         elif cmd == 'get':
             sub = parts[1].lower() if len(parts) > 1 else ''
-            asyncio.create_task(self._bot_get(sub))
+            arg = parts[2] if len(parts) > 2 else ''
+            asyncio.create_task(self._bot_get(sub, arg))
 
         elif cmd == 'set':
             if len(parts) < 3:
@@ -915,9 +916,6 @@ class IRCClient:
 
         elif cmd == 'listchannels':
             self._bot_listchannels()
-
-        elif cmd == 'setchannelscope':
-            self._bot_setchannelscope(' '.join(parts[1:]).strip())
 
         elif cmd == 'addcontact':
             if len(parts) < 2:
@@ -1039,7 +1037,12 @@ class IRCClient:
         else:
             self._bot_msg(f"Unknown command: {cmd}  —  try: help")
 
-    async def _bot_get(self, sub: str):
+    async def _bot_get(self, sub: str, arg: str = ''):
+        # channelscope is a gateway-side setting (no companion required) —
+        # handle it before the mc-connection guard below.
+        if sub == 'channelscope':
+            self._bot_getchannelscope(arg)
+            return
         mc = self.bridge.mc
         if not mc:
             self._bot_msg("MeshCore not connected")
@@ -1212,12 +1215,17 @@ class IRCClient:
 
             else:
                 self._bot_msg(
-                    f"Unknown: get {sub}  —  options: (empty)  power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  bat  stats  pathmode  deviceinfo  customs  scope"
+                    f"Unknown: get {sub}  —  options: (empty)  power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  bat  stats  pathmode  deviceinfo  customs  scope  channelscope"
                 )
         except Exception as e:
             self._bot_msg(f"Get error: {e}")
 
     async def _bot_set(self, setting: str, args: list):
+        # channelscope is a gateway-side setting (no companion required) —
+        # handle it before the mc-connection guard below.
+        if setting == 'channelscope':
+            self._bot_setchannelscope(' '.join(args))
+            return
         mc = self.bridge.mc
         if not mc:
             self._bot_msg("MeshCore not connected")
@@ -1393,7 +1401,7 @@ class IRCClient:
             else:
                 self._bot_msg(
                     f"Unknown setting: {setting}  —  "
-                    "options: power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  pathmode  scope"
+                    "options: power  radio  name  coords  autoadd  lockey  multiack  telemetry  af  tuning  pathmode  scope  channelscope"
                 )
 
         except (ValueError, IndexError) as e:
@@ -1818,10 +1826,40 @@ class IRCClient:
             scope_str = scope if scope else '—'
             self._bot_msg(f"  [{idx}] {name} → {irc_ch}  scope: {scope_str}")
 
+    def _push_channel_topic(self, idx: int):
+        """Broadcast the (scope-annotated) channel topic to all clients after a scope change."""
+        irc_channel = self.bridge.irc_channel_for_idx(idx)
+        topic = self.bridge.channel_topic(irc_channel)
+        self.bridge.broadcast(f":{BOT_NICK}!bot@meshcore TOPIC {irc_channel} :{topic}")
+
+    def _bot_getchannelscope(self, args_str: str):
+        parts = args_str.split()
+        if not parts:
+            self._bot_msg("Usage: get channelscope #channel")
+            return
+        channel = parts[0]
+        # Same ambiguity-aware, named-channel-only resolution as set (D-06, CSCOPE-06).
+        idxs = self.bridge.mc_idxs_for_channel(channel)
+        if not idxs:
+            self._bot_notice(
+                f"Unknown channel: {channel} (scopes apply to named channels only, "
+                "not #mesh-<n> slots)"
+            )
+            return
+        if len(idxs) > 1:
+            slot_list = ', '.join(str(i) for i in idxs)
+            self._bot_notice(
+                f"Ambiguous channel: {channel} matches slots [{slot_list}]"
+            )
+            return
+        chan_name = self.bridge.channels[idxs[0]]  # device name = persistence key (D-01)
+        scope = self.bridge.channel_scopes.get(chan_name, '')
+        self._bot_msg(f"Channel scope for {channel}: {scope if scope else 'none'}")
+
     def _bot_setchannelscope(self, args_str: str):
         parts = args_str.split()
         if len(parts) < 2:
-            self._bot_msg("Usage: setchannelscope #channel <name>|off")
+            self._bot_msg("Usage: set channelscope #channel <name>|off")
             return
         channel, val = parts[0], parts[1].lower()
         # D-06: ambiguity-aware resolution (CSCOPE-06, Pitfall 5)
@@ -1848,6 +1886,7 @@ class IRCClient:
         if is_clear:
             if self.bridge.clear_channel_scope(chan_name):
                 self._bot_notice(f"Scope cleared for {channel}")
+                self._push_channel_topic(idx)
             else:
                 self._bot_notice(f"{channel} had no scope")
             return
@@ -1861,6 +1900,7 @@ class IRCClient:
             f"Scope '{val}' applied to outbound messages on {channel} "
             "(gateway-side; not a device-stored per-channel setting)"
         )
+        self._push_channel_topic(idx)
 
     async def _bot_addcontact(self, arg: str, given_name: str = ''):
         arg = arg.strip().strip('[]')
